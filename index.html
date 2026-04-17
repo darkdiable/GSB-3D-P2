@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Babylon.js 3D Physics Simulation</title>
+    <title>Babylon.js 高级物理沙盒系统</title>
     <style>
         * {
             margin: 0;
@@ -14,7 +14,7 @@
         body {
             overflow: hidden;
             background-color: #1a1a1a;
-            font-family: Arial, sans-serif;
+            font-family: 'Segoe UI', sans-serif;
         }
         
         #renderCanvas {
@@ -30,192 +30,788 @@
             left: 10px;
             color: white;
             background: rgba(0, 0, 0, 0.7);
-            padding: 10px;
-            border-radius: 5px;
-            font-size: 14px;
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-size: 13px;
             z-index: 100;
+            max-width: 280px;
+            line-height: 1.6;
+        }
+        
+        #perfPanel {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: #00ff00;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-size: 12px;
+            z-index: 100;
+            font-family: 'Consolas', monospace;
+            min-width: 150px;
+        }
+        
+        .perf-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 3px 0;
+        }
+        
+        .perf-label {
+            color: #aaa;
+        }
+        
+        .perf-value {
+            color: #0f0;
         }
     </style>
 </head>
 <body>
     <canvas id="renderCanvas"></canvas>
     <div id="info">
-        <div>Babylon.js 3D Physics Simulation</div>
+        <div><strong>🎮 高级物理沙盒系统</strong></div>
         <div>左键旋转 | 右键平移 | 滚轮缩放</div>
-        <div>10个球体 + 5个立方体 | 物理碰撞模拟</div>
+        <div>D键: 删除选中物体 | E键: 触发爆炸</div>
+        <div>T键: 显示/隐藏轨迹 | 空格: 暂停/继续</div>
+    </div>
+    <div id="perfPanel">
+        <div class="perf-row"><span class="perf-label">FPS:</span><span class="perf-value" id="fps">0</span></div>
+        <div class="perf-row"><span class="perf-label">物体数:</span><span class="perf-value" id="objCount">0</span></div>
+        <div class="perf-row"><span class="perf-label">约束数:</span><span class="perf-value" id="jointCount">0</span></div>
+        <div class="perf-row"><span class="perf-label">物理时间:</span><span class="perf-value" id="physicsTime">0</span>ms</div>
     </div>
 
     <script src="https://cdn.babylonjs.com/babylon.js"></script>
     <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
     <script src="https://cdn.babylonjs.com/gui/babylon.gui.min.js"></script>
-    
-    <!-- 物理引擎 - 使用Cannon.js作为替代方案 -->
     <script src="https://cdn.babylonjs.com/cannon.js"></script>
-    <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
 
     <script>
-        // 初始化Babylon.js引擎和场景
         const canvas = document.getElementById('renderCanvas');
         const engine = new BABYLON.Engine(canvas, true);
         
-        // 创建场景
-        const createScene = function() {
-            const scene = new BABYLON.Scene(engine);
-            scene.clearColor = new BABYLON.Color4(0.1, 0.1, 0.18, 1); // 深蓝色背景 #1a1a2e
+        const PhysicsSandbox = {
+            scene: null,
+            camera: null,
+            advancedTexture: null,
+            objects: [],
+            joints: [],
+            forceFields: [],
+            selectedObject: null,
+            draggedObject: null,
+            dragPlane: null,
+            timeScale: 1,
+            isPaused: false,
+            showTrails: true,
+            debugMode: false,
+            snapShots: {},
+            trailsMap: new Map(),
             
-            // 启用物理引擎
-            scene.enablePhysics(new BABYLON.Vector3(0, -9.81, 0), new BABYLON.CannonJSPlugin());
+            config: {
+                mass: 1,
+                restitution: 0.5,
+                friction: 0.5,
+                size: 1,
+                color: '#ff4444'
+            },
             
-            // 创建相机
-            const camera = new BABYLON.ArcRotateCamera(
-                "camera",
-                -Math.PI / 2, // alpha
-                Math.PI / 2.5, // beta
-                15, // radius
-                new BABYLON.Vector3(0, 3, 0), // target
-                scene
-            );
-            camera.attachControl(canvas, true);
-            camera.lowerBetaLimit = 0.1;
-            camera.upperBetaLimit = Math.PI / 2;
-            camera.wheelPrecision = 50;
+            perf: {
+                fps: 0,
+                physicsStartTime: 0,
+                physicsTime: 0
+            },
             
-            // 创建光照系统
-            // 半球光 - 模拟天空和地面的漫反射
-            const hemisphericLight = new BABYLON.HemisphericLight(
-                "hemisphericLight",
-                new BABYLON.Vector3(0, 1, 0),
-                scene
-            );
-            hemisphericLight.intensity = 0.7;
+            init() {
+                this.scene = this.createScene();
+                this.setupGUI();
+                this.setupEvents();
+                this.setupRenderLoop();
+                return this.scene;
+            },
             
-            // 点光源 - 位于场景中心上方，产生阴影
-            const pointLight = new BABYLON.PointLight(
-                "pointLight",
-                new BABYLON.Vector3(0, 10, 0),
-                scene
-            );
-            pointLight.intensity = 0.8;
-            pointLight.diffuse = new BABYLON.Color3(1, 1, 0.8);
+            createScene() {
+                const scene = new BABYLON.Scene(engine);
+                scene.clearColor = new BABYLON.Color4(0.08, 0.08, 0.15, 1);
+                
+                scene.enablePhysics(new BABYLON.Vector3(0, -9.81, 0), new BABYLON.CannonJSPlugin());
+                
+                this.camera = new BABYLON.ArcRotateCamera(
+                    "camera", -Math.PI / 2, Math.PI / 2.5, 20,
+                    new BABYLON.Vector3(0, 3, 0), scene
+                );
+                this.camera.attachControl(canvas, true);
+                this.camera.lowerBetaLimit = 0.1;
+                this.camera.upperBetaLimit = Math.PI / 2;
+                this.camera.wheelPrecision = 50;
+                
+                const hemisphericLight = new BABYLON.HemisphericLight(
+                    "hemisphericLight", new BABYLON.Vector3(0, 1, 0), scene
+                );
+                hemisphericLight.intensity = 0.6;
+                
+                const pointLight = new BABYLON.PointLight(
+                    "pointLight", new BABYLON.Vector3(0, 12, 0), scene
+                );
+                pointLight.intensity = 1;
+                pointLight.diffuse = new BABYLON.Color3(1, 1, 0.9);
+                pointLight.shadowEnabled = true;
+                
+                const ground = BABYLON.MeshBuilder.CreateGround(
+                    "ground", { width: 40, height: 40 }, scene
+                );
+                const groundMaterial = new BABYLON.StandardMaterial("groundMaterial", scene);
+                groundMaterial.diffuseColor = new BABYLON.Color3(0.2, 0.2, 0.25);
+                groundMaterial.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+                ground.material = groundMaterial;
+                ground.physicsImpostor = new BABYLON.PhysicsImpostor(
+                    ground, BABYLON.PhysicsImpostor.BoxImpostor,
+                    { mass: 0, restitution: 0.3, friction: 0.5 }, scene
+                );
+                
+                this.createBounds(scene);
+                this.setupCollisionEvents(scene);
+                return scene;
+            },
             
-            // 创建地面
-            const ground = BABYLON.MeshBuilder.CreateGround(
-                "ground",
-                { width: 20, height: 20 },
-                scene
-            );
-            ground.position.y = 0;
-            
-            // 地面材质
-            const groundMaterial = new BABYLON.StandardMaterial("groundMaterial", scene);
-            groundMaterial.diffuseColor = new BABYLON.Color3(0.3, 0.3, 0.3);
-            groundMaterial.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1);
-            ground.material = groundMaterial;
-            
-            // 为地面添加物理impostor（静态）
-            ground.physicsImpostor = new BABYLON.PhysicsImpostor(
-                ground,
-                BABYLON.PhysicsImpostor.BoxImpostor,
-                { mass: 0, restitution: 0.3 },
-                scene
-            );
-            
-            // 生成随机颜色的函数
-            const getRandomColor = function() {
-                const colors = [
-                    new BABYLON.Color3(1, 0, 0), // 红
-                    new BABYLON.Color3(0, 1, 0), // 绿
-                    new BABYLON.Color3(0, 0, 1), // 蓝
-                    new BABYLON.Color3(1, 1, 0), // 黄
-                    new BABYLON.Color3(1, 0, 1), // 紫
-                    new BABYLON.Color3(0, 1, 1), // 青
-                    new BABYLON.Color3(1, 0.5, 0), // 橙
-                    new BABYLON.Color3(0.5, 0, 0.5), // 深紫
-                    new BABYLON.Color3(0.5, 0.5, 0), // 橄榄
-                    new BABYLON.Color3(0, 0.5, 0.5)  // 深青
+            createBounds(scene) {
+                const wallMaterial = new BABYLON.StandardMaterial("wallMat", scene);
+                wallMaterial.alpha = 0.1;
+                wallMaterial.diffuseColor = new BABYLON.Color3(0.3, 0.3, 0.5);
+                
+                const wallOpts = { width: 40, height: 10, depth: 0.5 };
+                const walls = [
+                    { pos: [0, 5, -20], rot: [0, 0, 0] },
+                    { pos: [0, 5, 20], rot: [0, 0, 0] },
+                    { pos: [-20, 5, 0], rot: [0, Math.PI / 2, 0] },
+                    { pos: [20, 5, 0], rot: [0, Math.PI / 2, 0] }
                 ];
-                return colors[Math.floor(Math.random() * colors.length)];
-            };
+                
+                walls.forEach((w, i) => {
+                    const wall = BABYLON.MeshBuilder.CreateBox(`wall${i}`, wallOpts, scene);
+                    wall.position.set(...w.pos);
+                    wall.rotation.set(...w.rot);
+                    wall.material = wallMaterial;
+                    wall.physicsImpostor = new BABYLON.PhysicsImpostor(
+                        wall, BABYLON.PhysicsImpostor.BoxImpostor,
+                        { mass: 0, restitution: 0.5 }, scene
+                    );
+                });
+            },
             
-            // 创建10个随机颜色的球体
-            for (let i = 0; i < 10; i++) {
-                const sphere = BABYLON.MeshBuilder.CreateSphere(
-                    `sphere${i}`,
-                    { diameter: 0.8 },
-                    scene
+            setupCollisionEvents(scene) {
+                scene.onBeforePhysicsObservable.add(() => {
+                    this.perf.physicsStartTime = performance.now();
+                });
+                
+                scene.onAfterPhysicsObservable.add(() => {
+                    this.perf.physicsTime = performance.now() - this.perf.physicsStartTime;
+                });
+            },
+            
+            createObject(type, position, physicsProps = {}) {
+                const { mass = this.config.mass, restitution = this.config.restitution, 
+                        friction = this.config.friction, size = this.config.size } = physicsProps;
+                
+                let mesh;
+                let impostorType;
+                
+                switch(type) {
+                    case 'sphere':
+                        mesh = BABYLON.MeshBuilder.CreateSphere(`obj_${Date.now()}`, { diameter: size }, this.scene);
+                        impostorType = BABYLON.PhysicsImpostor.SphereImpostor;
+                        break;
+                    case 'box':
+                        mesh = BABYLON.MeshBuilder.CreateBox(`obj_${Date.now()}`, { size: size }, this.scene);
+                        impostorType = BABYLON.PhysicsImpostor.BoxImpostor;
+                        break;
+                    case 'cylinder':
+                        mesh = BABYLON.MeshBuilder.CreateCylinder(`obj_${Date.now()}`, { height: size, diameter: size * 0.6 }, this.scene);
+                        impostorType = BABYLON.PhysicsImpostor.CylinderImpostor;
+                        break;
+                    case 'cone':
+                        mesh = BABYLON.MeshBuilder.CreateCylinder(`obj_${Date.now()}`, { height: size, diameterTop: 0, diameterBottom: size }, this.scene);
+                        impostorType = BABYLON.PhysicsImpostor.CylinderImpostor;
+                        break;
+                    default:
+                        mesh = BABYLON.MeshBuilder.CreateSphere(`obj_${Date.now()}`, { diameter: size }, this.scene);
+                        impostorType = BABYLON.PhysicsImpostor.SphereImpostor;
+                }
+                
+                mesh.position.copyFrom(position);
+                
+                const material = new BABYLON.StandardMaterial(`mat_${mesh.name}`, this.scene);
+                const c = BABYLON.Color3.FromHexString(this.config.color);
+                material.diffuseColor = c;
+                material.specularColor = c.scale(0.3);
+                mesh.material = material;
+                
+                mesh.physicsImpostor = new BABYLON.PhysicsImpostor(
+                    mesh, impostorType,
+                    { mass, restitution, friction }, this.scene
                 );
                 
-                // 随机位置（场景上方）
-                sphere.position = new BABYLON.Vector3(
-                    (Math.random() - 0.5) * 8, // x: -4 到 4
-                    5 + Math.random() * 3,     // y: 5 到 8
-                    (Math.random() - 0.5) * 8  // z: -4 到 4
+                this.setupObjectPhysics(mesh);
+                this.objects.push(mesh);
+                this.addTrail(mesh);
+                return mesh;
+            },
+            
+            setupObjectPhysics(mesh) {
+                mesh.physicsImpostor.registerOnPhysicsCollide(undefined, (collider, collided) => {
+                    const contact = collider.getContactPoint();
+                    if (contact) {
+                        this.createCollisionParticles(contact);
+                    }
+                });
+            },
+            
+            createCollisionParticles(position) {
+                const particleSystem = new BABYLON.ParticleSystem("collisionPS", 50, this.scene);
+                particleSystem.particleTexture = new BABYLON.Texture(
+                    "https://www.babylonjs-playground.com/textures/flare.png", this.scene
                 );
-                
-                // 球体材质
-                const sphereMaterial = new BABYLON.StandardMaterial(`sphereMaterial${i}`, scene);
-                sphereMaterial.diffuseColor = getRandomColor();
-                sphereMaterial.specularColor = new BABYLON.Color3(0.3, 0.3, 0.3);
-                sphere.material = sphereMaterial;
-                
-                // 为球体添加物理impostor
-                sphere.physicsImpostor = new BABYLON.PhysicsImpostor(
-                    sphere,
-                    BABYLON.PhysicsImpostor.SphereImpostor,
-                    { mass: 1, restitution: 0.6, friction: 0.5 },
-                    scene
+                particleSystem.emitter = position;
+                particleSystem.minEmitBox = new BABYLON.Vector3(-0.1, -0.1, -0.1);
+                particleSystem.maxEmitBox = new BABYLON.Vector3(0.1, 0.1, 0.1);
+                particleSystem.color1 = new BABYLON.Color4(1, 0.8, 0.2, 1);
+                particleSystem.color2 = new BABYLON.Color4(1, 0.3, 0, 1);
+                particleSystem.colorDead = new BABYLON.Color4(0, 0, 0, 0);
+                particleSystem.minSize = 0.1;
+                particleSystem.maxSize = 0.3;
+                particleSystem.minLifeTime = 0.2;
+                particleSystem.maxLifeTime = 0.5;
+                particleSystem.emitRate = 500;
+                particleSystem.direction1 = new BABYLON.Vector3(-3, 3, -3);
+                particleSystem.direction2 = new BABYLON.Vector3(3, 6, 3);
+                particleSystem.minAngularSpeed = 0;
+                particleSystem.maxAngularSpeed = Math.PI;
+                particleSystem.minEmitPower = 2;
+                particleSystem.maxEmitPower = 5;
+                particleSystem.gravity = new BABYLON.Vector3(0, -9.81, 0);
+                particleSystem.targetStopDuration = 0.05;
+                particleSystem.disposeOnStop = true;
+                particleSystem.start();
+            },
+            
+            createExplosion(position, radius = 5, strength = 30) {
+                const explosionPS = new BABYLON.ParticleSystem("explosionPS", 200, this.scene);
+                explosionPS.particleTexture = new BABYLON.Texture(
+                    "https://www.babylonjs-playground.com/textures/flare.png", this.scene
                 );
+                explosionPS.emitter = position;
+                explosionPS.color1 = new BABYLON.Color4(1, 0.5, 0, 1);
+                explosionPS.color2 = new BABYLON.Color4(1, 0, 0, 1);
+                explosionPS.colorDead = new BABYLON.Color4(0.3, 0.3, 0.3, 0);
+                explosionPS.minSize = 0.3;
+                explosionPS.maxSize = 1.5;
+                explosionPS.minLifeTime = 0.5;
+                explosionPS.maxLifeTime = 1.5;
+                explosionPS.emitRate = 2000;
+                explosionPS.minEmitPower = 10;
+                explosionPS.maxEmitPower = 20;
+                explosionPS.targetStopDuration = 0.1;
+                explosionPS.disposeOnStop = true;
+                explosionPS.start();
+                
+                this.objects.forEach(obj => {
+                    if (obj.physicsImpostor && obj.physicsImpostor.mass > 0) {
+                        const distance = BABYLON.Vector3.Distance(obj.position, position);
+                        if (distance < radius) {
+                            const direction = obj.position.subtract(position).normalize();
+                            const force = direction.scale(strength * (1 - distance / radius));
+                            obj.physicsImpostor.applyImpulse(force, obj.position);
+                        }
+                    }
+                });
+                
+                if (this.selectedObject) {
+                    const dist = BABYLON.Vector3.Distance(this.selectedObject.position, position);
+                    if (dist < radius * 0.5) {
+                        this.breakObject(this.selectedObject);
+                    }
+                }
+            },
+            
+            breakObject(obj) {
+                const pos = obj.position.clone();
+                const pieces = 5;
+                
+                for (let i = 0; i < pieces; i++) {
+                    const piece = BABYLON.MeshBuilder.CreateBox(`piece_${Date.now()}_${i}`, { size: 0.3 }, this.scene);
+                    piece.position = pos.add(new BABYLON.Vector3(
+                        (Math.random() - 0.5) * 0.5,
+                        (Math.random() - 0.5) * 0.5,
+                        (Math.random() - 0.5) * 0.5
+                    ));
+                    
+                    const mat = new BABYLON.StandardMaterial(`pieceMat${i}`, this.scene);
+                    mat.diffuseColor = obj.material.diffuseColor;
+                    piece.material = mat;
+                    
+                    piece.physicsImpostor = new BABYLON.PhysicsImpostor(
+                        piece, BABYLON.PhysicsImpostor.BoxImpostor,
+                        { mass: 0.2, restitution: 0.6 }, this.scene
+                    );
+                    
+                    piece.physicsImpostor.setLinearVelocity(new BABYLON.Vector3(
+                        (Math.random() - 0.5) * 10,
+                        Math.random() * 8,
+                        (Math.random() - 0.5) * 10
+                    ));
+                    
+                    this.objects.push(piece);
+                    this.addTrail(piece);
+                }
+                
+                this.deleteObject(obj);
+            },
+            
+            addTrail(mesh) {
+                const trail = BABYLON.MeshBuilder.CreateLines(`trail_${mesh.name}`, {
+                    points: [mesh.position.clone()],
+                    updatable: true
+                }, this.scene);
+                trail.color = mesh.material.diffuseColor;
+                trail.alpha = 0.6;
+                trail.isVisible = this.showTrails;
+                this.trailsMap.set(mesh.name, { trail, points: [mesh.position.clone()], mesh });
+            },
+            
+            updateTrails() {
+                if (!this.showTrails) return;
+                
+                this.trailsMap.forEach((trailData, key) => {
+                    if (trailData.mesh && !trailData.mesh.isDisposed()) {
+                        trailData.points.push(trailData.mesh.position.clone());
+                        if (trailData.points.length > 100) trailData.points.shift();
+                        
+                        BABYLON.MeshBuilder.CreateLines(null, {
+                            points: trailData.points,
+                            instance: trailData.trail
+                        });
+                    }
+                });
+            },
+            
+            deleteObject(obj) {
+                const index = this.objects.indexOf(obj);
+                if (index > -1) this.objects.splice(index, 1);
+                
+                if (this.trailsMap.has(obj.name)) {
+                    this.trailsMap.get(obj.name).trail.dispose();
+                    this.trailsMap.delete(obj.name);
+                }
+                
+                if (obj.physicsImpostor) obj.physicsImpostor.dispose();
+                obj.dispose();
+                
+                if (this.selectedObject === obj) this.selectedObject = null;
+            },
+            
+            createSpringJoint(obj1, obj2, options = {}) {
+                const { stiffness = 100, damping = 1, restLength = 2 } = options;
+                const joint = new BABYLON.PhysicsJoint(BABYLON.PhysicsJoint.SpringJoint, {
+                    nativeParams: {
+                        distance: restLength,
+                        stiffness: stiffness,
+                        damping: damping
+                    },
+                    connectedBody: obj2.physicsImpostor
+                });
+                obj1.physicsImpostor.addJoint(obj2.physicsImpostor, joint);
+                this.joints.push({ type: 'spring', obj1, obj2, joint });
+                return joint;
+            },
+            
+            createHingeJoint(obj1, obj2, pivot, axis) {
+                const joint = new BABYLON.PhysicsJoint(BABYLON.PhysicsJoint.HingeJoint, {
+                    mainPivot: pivot,
+                    connectedPivot: pivot,
+                    mainAxis: axis,
+                    connectedAxis: axis,
+                    connectedBody: obj2.physicsImpostor
+                });
+                obj1.physicsImpostor.addJoint(obj2.physicsImpostor, joint);
+                this.joints.push({ type: 'hinge', obj1, obj2, joint });
+                return joint;
+            },
+            
+            createDistanceJoint(obj1, obj2, maxDistance = 3) {
+                const joint = new BABYLON.PhysicsJoint(BABYLON.PhysicsJoint.DistanceJoint, {
+                    maxDistance: maxDistance,
+                    connectedBody: obj2.physicsImpostor
+                });
+                obj1.physicsImpostor.addJoint(obj2.physicsImpostor, joint);
+                this.joints.push({ type: 'distance', obj1, obj2, joint });
+                return joint;
+            },
+            
+            createForceField(position, strength = 10, radius = 8, type = 'attract') {
+                const sphere = BABYLON.MeshBuilder.CreateSphere(`forceField_${Date.now()}`, { diameter: radius * 2 }, this.scene);
+                sphere.position = position;
+                const mat = new BABYLON.StandardMaterial('ffMat', this.scene);
+                mat.alpha = 0.2;
+                mat.diffuseColor = type === 'attract' ? new BABYLON.Color3(0, 0.5, 1) : new BABYLON.Color3(1, 0.5, 0);
+                sphere.material = mat;
+                
+                const field = { mesh: sphere, position, strength, radius, type, enabled: true };
+                this.forceFields.push(field);
+                return field;
+            },
+            
+            updateForceFields() {
+                this.forceFields.forEach(field => {
+                    if (!field.enabled) return;
+                    
+                    this.objects.forEach(obj => {
+                        if (!obj.physicsImpostor || obj.physicsImpostor.mass <= 0) return;
+                        
+                        const distance = BABYLON.Vector3.Distance(obj.position, field.position);
+                        if (distance < field.radius && distance > 0.5) {
+                            const direction = field.type === 'attract' 
+                                ? field.position.subtract(obj.position).normalize()
+                                : obj.position.subtract(field.position).normalize();
+                            
+                            const force = direction.scale(field.strength * (1 - distance / field.radius));
+                            obj.physicsImpostor.applyForce(force, obj.position);
+                        }
+                    });
+                });
+            },
+            
+            saveSnapshot(name) {
+                this.snapShots[name] = this.objects.map(obj => ({
+                    name: obj.name,
+                    type: obj.geometry.getClassName(),
+                    position: obj.position.clone(),
+                    rotation: obj.rotation.clone(),
+                    linearVelocity: obj.physicsImpostor.getLinearVelocity().clone(),
+                    angularVelocity: obj.physicsImpostor.getAngularVelocity().clone()
+                }));
+            },
+            
+            loadSnapshot(name) {
+                if (!this.snapShots[name]) return;
+                
+                while (this.objects.length > 0) {
+                    this.deleteObject(this.objects[0]);
+                }
+                
+                this.snapShots[name].forEach(data => {
+                    let mesh;
+                    if (data.type.includes('Sphere')) {
+                        mesh = BABYLON.MeshBuilder.CreateSphere(data.name, { diameter: 1 }, this.scene);
+                    } else {
+                        mesh = BABYLON.MeshBuilder.CreateBox(data.name, { size: 1 }, this.scene);
+                    }
+                    
+                    mesh.position.copyFrom(data.position);
+                    mesh.rotation.copyFrom(data.rotation);
+                    
+                    const mat = new BABYLON.StandardMaterial(`mat_${data.name}`, this.scene);
+                    mat.diffuseColor = BABYLON.Color3.FromHexString(this.config.color);
+                    mesh.material = mat;
+                    
+                    mesh.physicsImpostor = new BABYLON.PhysicsImpostor(
+                        mesh, BABYLON.PhysicsImpostor.SphereImpostor,
+                        { mass: this.config.mass, restitution: this.config.restitution }, this.scene
+                    );
+                    
+                    mesh.physicsImpostor.setLinearVelocity(data.linearVelocity);
+                    mesh.physicsImpostor.setAngularVelocity(data.angularVelocity);
+                    
+                    this.objects.push(mesh);
+                    this.addTrail(mesh);
+                });
+            },
+            
+            loadPreset(preset) {
+                this.objects.forEach(obj => this.deleteObject(obj));
+                
+                switch(preset) {
+                    case 'domino':
+                        for (let i = 0; i < 15; i++) {
+                            const box = this.createObject('box', new BABYLON.Vector3(-6 + i * 0.8, 0.6, 0), { mass: 1, size: 1 });
+                            box.scaling.set(0.2, 1.2, 0.6);
+                        }
+                        break;
+                        
+                    case 'newton':
+                        const bar = BABYLON.MeshBuilder.CreateBox('bar', { width: 6, height: 0.3, depth: 0.3 }, this.scene);
+                        bar.position = new BABYLON.Vector3(0, 6, 0);
+                        bar.physicsImpostor = new BABYLON.PhysicsImpostor(
+                            bar, BABYLON.PhysicsImpostor.BoxImpostor, { mass: 0 }, this.scene
+                        );
+                        
+                        for (let i = 0; i < 5; i++) {
+                            const sphere = this.createObject('sphere', 
+                                new BABYLON.Vector3(-2 + i, 3, 0), { mass: 2, size: 0.8 });
+                            this.createDistanceJoint(bar, sphere, 3);
+                        }
+                        break;
+                        
+                    case 'stack':
+                        for (let layer = 0; layer < 6; layer++) {
+                            const count = 6 - layer;
+                            for (let i = 0; i < count; i++) {
+                                this.createObject('box', 
+                                    new BABYLON.Vector3(-count/2 + i + 0.5, 0.5 + layer, 0),
+                                    { mass: 1, size: 0.95 }
+                                );
+                            }
+                        }
+                        break;
+                }
+            },
+            
+            setupGUI() {
+                this.advancedTexture = BABYLON.GUI.AdvancedDynamicTexture.CreateFullscreenUI("UI");
+                
+                const panel = new BABYLON.GUI.StackPanel();
+                panel.width = "250px";
+                panel.horizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
+                panel.verticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_TOP;
+                panel.left = "20px";
+                panel.top = "120px";
+                panel.paddingLeftInPixels = 10;
+                panel.paddingRightInPixels = 10;
+                panel.paddingTopInPixels = 10;
+                panel.paddingBottomInPixels = 10;
+                panel.background = "rgba(0, 0, 0, 0.8)";
+                panel.cornerRadius = 8;
+                this.advancedTexture.addControl(panel);
+                
+                const addHeader = (text) => {
+                    const header = new BABYLON.GUI.TextBlock();
+                    header.text = text;
+                    header.color = "white";
+                    header.height = "30px";
+                    header.fontSize = 14;
+                    header.fontWeight = "bold";
+                    panel.addControl(header);
+                };
+                
+                const createSlider = (min, max, value, callback) => {
+                    const slider = new BABYLON.GUI.Slider();
+                    slider.minimum = min;
+                    slider.maximum = max;
+                    slider.value = value;
+                    slider.height = "20px";
+                    slider.color = "#00aaff";
+                    slider.background = "#333";
+                    slider.onValueChangedObservable.add(callback);
+                    panel.addControl(slider);
+                    return slider;
+                };
+                
+                const createButton = (text, callback) => {
+                    const btn = BABYLON.GUI.Button.CreateSimpleButton("", text);
+                    btn.width = "180px";
+                    btn.height = "35px";
+                    btn.color = "white";
+                    btn.background = "#0066aa";
+                    btn.fontSize = 12;
+                    btn.cornerRadius = 4;
+                    btn.onPointerClickObservable.add(callback);
+                    btn.marginTopInPixels = 5;
+                    btn.marginBottomInPixels = 5;
+                    panel.addControl(btn);
+                    return btn;
+                };
+                
+                addHeader("📦 物体生成器");
+                
+                const types = ['球体', '立方体', '圆柱体', '锥体'];
+                const typeMap = ['sphere', 'box', 'cylinder', 'cone'];
+                let selectedType = 0;
+                
+                types.forEach((type, idx) => {
+                    const btn = createButton(type, () => {
+                        selectedType = idx;
+                        this.createObject(typeMap[idx], new BABYLON.Vector3(
+                            (Math.random() - 0.5) * 6, 8, (Math.random() - 0.5) * 6
+                        ));
+                    });
+                    btn.background = idx === 0 ? '#0088cc' : '#005588';
+                });
+                
+                addHeader("⚙️ 物理属性");
+                
+                const massLabel = new BABYLON.GUI.TextBlock();
+                massLabel.text = `质量: ${this.config.mass.toFixed(1)}`;
+                massLabel.color = "white";
+                massLabel.height = "20px";
+                massLabel.fontSize = 11;
+                panel.addControl(massLabel);
+                createSlider(0.1, 10, this.config.mass, (v) => {
+                    this.config.mass = v;
+                    massLabel.text = `质量: ${v.toFixed(1)}`;
+                });
+                
+                const restLabel = new BABYLON.GUI.TextBlock();
+                restLabel.text = `弹性: ${this.config.restitution.toFixed(2)}`;
+                restLabel.color = "white";
+                restLabel.height = "20px";
+                restLabel.fontSize = 11;
+                panel.addControl(restLabel);
+                createSlider(0, 1, this.config.restitution, (v) => {
+                    this.config.restitution = v;
+                    restLabel.text = `弹性: ${v.toFixed(2)}`;
+                });
+                
+                const fricLabel = new BABYLON.GUI.TextBlock();
+                fricLabel.text = `摩擦: ${this.config.friction.toFixed(2)}`;
+                fricLabel.color = "white";
+                fricLabel.height = "20px";
+                fricLabel.fontSize = 11;
+                panel.addControl(fricLabel);
+                createSlider(0, 1, this.config.friction, (v) => {
+                    this.config.friction = v;
+                    fricLabel.text = `摩擦: ${v.toFixed(2)}`;
+                });
+                
+                addHeader("🔗 物理约束");
+                createButton("创建弹簧约束", () => {
+                    if (this.objects.length >= 2) {
+                        this.createSpringJoint(this.objects[0], this.objects[1]);
+                    }
+                });
+                createButton("创建铰链约束", () => {
+                    if (this.objects.length >= 2) {
+                        this.createHingeJoint(this.objects[0], this.objects[1], 
+                            new BABYLON.Vector3(0, 1, 0), new BABYLON.Vector3(1, 0, 0));
+                    }
+                });
+                createButton("创建距离约束", () => {
+                    if (this.objects.length >= 2) {
+                        this.createDistanceJoint(this.objects[0], this.objects[1], 3);
+                    }
+                });
+                
+                addHeader("⏱️ 时间控制");
+                createButton("暂停/继续", () => {
+                    this.isPaused = !this.isPaused;
+                    this.scene.getPhysicsEngine().setTimeStep(this.isPaused ? 0 : 1/60 * this.timeScale);
+                });
+                createButton("慢动作 (0.25x)", () => {
+                    this.timeScale = 0.25;
+                    this.scene.getPhysicsEngine().setTimeStep(1/60 * this.timeScale);
+                });
+                createButton("正常速度 (1x)", () => {
+                    this.timeScale = 1;
+                    this.scene.getPhysicsEngine().setTimeStep(1/60 * this.timeScale);
+                });
+                createButton("快进 (2x)", () => {
+                    this.timeScale = 2;
+                    this.scene.getPhysicsEngine().setTimeStep(1/60 * this.timeScale);
+                });
+                
+                addHeader("🎬 预设场景");
+                createButton("多米诺骨牌", () => this.loadPreset('domino'));
+                createButton("牛顿摆", () => this.loadPreset('newton'));
+                createButton("堆叠挑战", () => this.loadPreset('stack'));
+                
+                addHeader("💾 场景管理");
+                createButton("保存快照", () => this.saveSnapshot('quick'));
+                createButton("加载快照", () => this.loadSnapshot('quick'));
+                createButton("清空场景", () => {
+                    this.objects.forEach(obj => this.deleteObject(obj));
+                });
+                
+                addHeader("⚡ 力场");
+                createButton("添加吸引力场", () => {
+                    this.createForceField(new BABYLON.Vector3(0, 3, 0), 15, 10, 'attract');
+                });
+                createButton("添加排斥力场", () => {
+                    this.createForceField(new BABYLON.Vector3(0, 3, 0), 15, 10, 'repel');
+                });
+            },
+            
+            setupEvents() {
+                let ray = new BABYLON.Ray();
+                let rayHelper = new BABYLON.RayHelper(ray);
+                
+                this.scene.onPointerObservable.add((evt) => {
+                    if (evt.type === BABYLON.PointerEventTypes.POINTERDOWN) {
+                        const pickInfo = this.scene.pick(this.scene.pointerX, this.scene.pointerY);
+                        if (pickInfo.hit && pickInfo.pickedMesh && pickInfo.pickedMesh.name.startsWith('obj_')) {
+                            this.selectedObject = pickInfo.pickedMesh;
+                            this.draggedObject = pickInfo.pickedMesh;
+                            
+                            this.dragPlane = BABYLON.Plane.FromPositionAndNormal(
+                                this.draggedObject.position,
+                                this.camera.getForwardRay().direction
+                            );
+                        }
+                    } else if (evt.type === BABYLON.PointerEventTypes.POINTERUP) {
+                        this.draggedObject = null;
+                    } else if (evt.type === BABYLON.PointerEventTypes.POINTERMOVE && this.draggedObject) {
+                        const pickRay = this.scene.createPickingRay(this.scene.pointerX, this.scene.pointerY);
+                        const hit = pickRay.intersectsPlane(this.dragPlane);
+                        if (hit) {
+                            const newPos = pickRay.origin.add(pickRay.direction.scale(hit));
+                            this.draggedObject.position.copyFrom(newPos);
+                            if (this.draggedObject.physicsImpostor) {
+                                this.draggedObject.physicsImpostor.setLinearVelocity(BABYLON.Vector3.Zero());
+                            }
+                        }
+                    }
+                });
+                
+                window.addEventListener('keydown', (e) => {
+                    switch(e.code) {
+                        case 'KeyD':
+                            if (this.selectedObject) this.deleteObject(this.selectedObject);
+                            break;
+                        case 'KeyE':
+                            if (this.selectedObject) {
+                                this.createExplosion(this.selectedObject.position);
+                            }
+                            break;
+                        case 'KeyT':
+                            this.showTrails = !this.showTrails;
+                            this.trailsMap.forEach(td => td.trail.isVisible = this.showTrails);
+                            break;
+                        case 'Space':
+                            e.preventDefault();
+                            this.isPaused = !this.isPaused;
+                            this.scene.getPhysicsEngine().setTimeStep(this.isPaused ? 0 : 1/60 * this.timeScale);
+                            break;
+                    }
+                });
+            },
+            
+            setupRenderLoop() {
+                let frameCount = 0;
+                let lastTime = performance.now();
+                
+                engine.runRenderLoop(() => {
+                    frameCount++;
+                    const now = performance.now();
+                    if (now - lastTime >= 1000) {
+                        this.perf.fps = frameCount;
+                        frameCount = 0;
+                        lastTime = now;
+                        
+                        document.getElementById('fps').textContent = this.perf.fps;
+                        document.getElementById('objCount').textContent = this.objects.length;
+                        document.getElementById('jointCount').textContent = this.joints.length;
+                        document.getElementById('physicsTime').textContent = this.perf.physicsTime.toFixed(2);
+                    }
+                    
+                    if (!this.isPaused) {
+                        this.updateForceFields();
+                        this.updateTrails();
+                    }
+                    
+                    this.scene.render();
+                });
             }
-            
-            // 创建5个随机颜色的立方体
-            for (let i = 0; i < 5; i++) {
-                const box = BABYLON.MeshBuilder.CreateBox(
-                    `box${i}`,
-                    { size: 0.8 },
-                    scene
-                );
-                
-                // 随机位置（场景上方）
-                box.position = new BABYLON.Vector3(
-                    (Math.random() - 0.5) * 8, // x: -4 到 4
-                    5 + Math.random() * 3,     // y: 5 到 8
-                    (Math.random() - 0.5) * 8  // z: -4 到 4
-                );
-                
-                // 随机旋转
-                box.rotation = new BABYLON.Vector3(
-                    Math.random() * Math.PI,
-                    Math.random() * Math.PI,
-                    Math.random() * Math.PI
-                );
-                
-                // 立方体材质
-                const boxMaterial = new BABYLON.StandardMaterial(`boxMaterial${i}`, scene);
-                boxMaterial.diffuseColor = getRandomColor();
-                boxMaterial.specularColor = new BABYLON.Color3(0.3, 0.3, 0.3);
-                box.material = boxMaterial;
-                
-                // 为立方体添加物理impostor
-                box.physicsImpostor = new BABYLON.PhysicsImpostor(
-                    box,
-                    BABYLON.PhysicsImpostor.BoxImpostor,
-                    { mass: 1.5, restitution: 0.4, friction: 0.6 },
-                    scene
-                );
-            }
-            
-            return scene;
         };
         
-        // 创建场景
-        const scene = createScene();
+        const scene = PhysicsSandbox.init();
         
-        // 渲染循环
-        engine.runRenderLoop(function() {
-            scene.render();
-        });
-        
-        // 窗口大小调整
         window.addEventListener('resize', function() {
             engine.resize();
         });
