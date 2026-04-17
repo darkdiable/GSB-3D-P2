@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Babylon.js 3D Physics Simulation</title>
+    <title>Babylon.js 高级交互式物理沙盒系统</title>
     <style>
         * {
             margin: 0;
@@ -14,7 +14,7 @@
         body {
             overflow: hidden;
             background-color: #1a1a1a;
-            font-family: Arial, sans-serif;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
         
         #renderCanvas {
@@ -29,192 +29,1730 @@
             top: 10px;
             left: 10px;
             color: white;
-            background: rgba(0, 0, 0, 0.7);
-            padding: 10px;
-            border-radius: 5px;
-            font-size: 14px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 13px;
             z-index: 100;
+            max-width: 280px;
+            backdrop-filter: blur(5px);
+        }
+        
+        #info h3 {
+            margin-bottom: 8px;
+            color: #4fc3f7;
+            font-size: 14px;
+        }
+        
+        #info div {
+            margin: 4px 0;
+            line-height: 1.4;
+        }
+        
+        #performancePanel {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: white;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 12px;
+            z-index: 100;
+            min-width: 180px;
+            backdrop-filter: blur(5px);
+        }
+        
+        #performancePanel h3 {
+            margin-bottom: 10px;
+            color: #81c784;
+            font-size: 14px;
+        }
+        
+        .perf-item {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+        }
+        
+        .perf-value {
+            color: #ffd54f;
+            font-weight: bold;
+        }
+        
+        #controls {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            color: white;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 12px;
+            z-index: 100;
+            backdrop-filter: blur(5px);
+        }
+        
+        #controls h3 {
+            margin-bottom: 8px;
+            color: #ff8a65;
+        }
+        
+        .key {
+            color: #4fc3f7;
+            font-weight: bold;
         }
     </style>
 </head>
 <body>
     <canvas id="renderCanvas"></canvas>
+    
     <div id="info">
-        <div>Babylon.js 3D Physics Simulation</div>
-        <div>左键旋转 | 右键平移 | 滚轮缩放</div>
-        <div>10个球体 + 5个立方体 | 物理碰撞模拟</div>
+        <h3>🎮 物理沙盒系统</h3>
+        <div>左键: 旋转视角 | 右键: 平移 | 滚轮: 缩放</div>
+        <div>点击物体: 选中/拖拽 | 双击: 爆炸效果</div>
+        <div>Shift+点击: 创建约束连接</div>
+        <div>Ctrl+点击: 放置力场</div>
+    </div>
+    
+    <div id="performancePanel">
+        <h3>📊 性能监控</h3>
+        <div class="perf-item"><span>FPS:</span><span class="perf-value" id="fpsValue">60</span></div>
+        <div class="perf-item"><span>物体数量:</span><span class="perf-value" id="objectCount">0</span></div>
+        <div class="perf-item"><span>物理时间:</span><span class="perf-value" id="physicsTime">0ms</span></div>
+        <div class="perf-item"><span>约束数量:</span><span class="perf-value" id="constraintCount">0</span></div>
+        <div class="perf-item"><span>粒子数量:</span><span class="perf-value" id="particleCount">0</span></div>
+    </div>
+    
+    <div id="controls">
+        <h3>⌨️ 快捷键</h3>
+        <div><span class="key">Space</span> - 暂停/继续</div>
+        <div><span class="key">S</span> - 保存场景快照</div>
+        <div><span class="key">L</span> - 加载场景快照</div>
+        <div><span class="key">R</span> - 重置场景</div>
+        <div><span class="key">D</span> - 切换调试模式</div>
+        <div><span class="key">Delete</span> - 删除选中物体</div>
+        <div><span class="key">1-5</span> - 加载预设场景</div>
     </div>
 
     <script src="https://cdn.babylonjs.com/babylon.js"></script>
     <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
     <script src="https://cdn.babylonjs.com/gui/babylon.gui.min.js"></script>
-    
-    <!-- 物理引擎 - 使用Cannon.js作为替代方案 -->
-    <script src="https://cdn.babylonjs.com/cannon.js"></script>
-    <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+    <script src="https://cdn.babylonjs.com/ammo.js"></script>
 
     <script>
-        // 初始化Babylon.js引擎和场景
+        // ==================== 全局变量 ====================
         const canvas = document.getElementById('renderCanvas');
         const engine = new BABYLON.Engine(canvas, true);
+        let scene, camera, physicsPlugin;
+        let advancedTexture;
+        let selectedMesh = null;
+        let constraintStartMesh = null;
+        let joints = [];
+        let forceFields = [];
+        let trajectories = new Map();
+        let particleSystems = [];
+        let debugMode = false;
+        let timeScale = 1.0;
+        let isPaused = false;
+        let sceneSnapshots = [];
+        let velocityVectors = [];
+        let forceVectors = [];
+        let collisionVisualizers = [];
         
-        // 创建场景
-        const createScene = function() {
-            const scene = new BABYLON.Scene(engine);
-            scene.clearColor = new BABYLON.Color4(0.1, 0.1, 0.18, 1); // 深蓝色背景 #1a1a2e
-            
-            // 启用物理引擎
-            scene.enablePhysics(new BABYLON.Vector3(0, -9.81, 0), new BABYLON.CannonJSPlugin());
+        // 物体计数器
+        let objectCounter = 0;
+        
+        // 材质缓存
+        const materialCache = new Map();
+        
+        // ==================== 场景创建 ====================
+        const createScene = async function() {
+            scene = new BABYLON.Scene(engine);
+            scene.clearColor = new BABYLON.Color4(0.08, 0.08, 0.12, 1);
+
+            // 启用物理引擎 - 等待Ammo加载完成
+            await Ammo();
+            physicsPlugin = new BABYLON.AmmoJSPlugin(true, Ammo);
+            scene.enablePhysics(new BABYLON.Vector3(0, -9.81, 0), physicsPlugin);
             
             // 创建相机
-            const camera = new BABYLON.ArcRotateCamera(
+            camera = new BABYLON.ArcRotateCamera(
                 "camera",
-                -Math.PI / 2, // alpha
-                Math.PI / 2.5, // beta
-                15, // radius
-                new BABYLON.Vector3(0, 3, 0), // target
+                -Math.PI / 2,
+                Math.PI / 2.8,
+                20,
+                new BABYLON.Vector3(0, 3, 0),
                 scene
             );
             camera.attachControl(canvas, true);
             camera.lowerBetaLimit = 0.1;
-            camera.upperBetaLimit = Math.PI / 2;
+            camera.upperBetaLimit = Math.PI / 2 - 0.05;
             camera.wheelPrecision = 50;
+            camera.lowerRadiusLimit = 5;
+            camera.upperRadiusLimit = 50;
             
-            // 创建光照系统
-            // 半球光 - 模拟天空和地面的漫反射
+            // 创建光照
             const hemisphericLight = new BABYLON.HemisphericLight(
                 "hemisphericLight",
                 new BABYLON.Vector3(0, 1, 0),
                 scene
             );
-            hemisphericLight.intensity = 0.7;
+            hemisphericLight.intensity = 0.6;
+            hemisphericLight.groundColor = new BABYLON.Color3(0.1, 0.1, 0.15);
             
-            // 点光源 - 位于场景中心上方，产生阴影
-            const pointLight = new BABYLON.PointLight(
-                "pointLight",
-                new BABYLON.Vector3(0, 10, 0),
+            const dirLight = new BABYLON.DirectionalLight(
+                "dirLight",
+                new BABYLON.Vector3(-1, -2, -1),
                 scene
             );
-            pointLight.intensity = 0.8;
-            pointLight.diffuse = new BABYLON.Color3(1, 1, 0.8);
+            dirLight.position = new BABYLON.Vector3(10, 20, 10);
+            dirLight.intensity = 0.8;
+            
+            // 启用阴影
+            const shadowGenerator = new BABYLON.ShadowGenerator(2048, dirLight);
+            shadowGenerator.useBlurExponentialShadowMap = true;
+            shadowGenerator.blurKernel = 32;
             
             // 创建地面
-            const ground = BABYLON.MeshBuilder.CreateGround(
-                "ground",
-                { width: 20, height: 20 },
-                scene
-            );
-            ground.position.y = 0;
+            createGround(shadowGenerator);
             
-            // 地面材质
-            const groundMaterial = new BABYLON.StandardMaterial("groundMaterial", scene);
-            groundMaterial.diffuseColor = new BABYLON.Color3(0.3, 0.3, 0.3);
-            groundMaterial.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1);
-            ground.material = groundMaterial;
+            // 创建GUI
+            createGUI();
             
-            // 为地面添加物理impostor（静态）
-            ground.physicsImpostor = new BABYLON.PhysicsImpostor(
-                ground,
-                BABYLON.PhysicsImpostor.BoxImpostor,
-                { mass: 0, restitution: 0.3 },
-                scene
-            );
+            // 设置交互
+            setupInteractions(shadowGenerator);
             
-            // 生成随机颜色的函数
-            const getRandomColor = function() {
-                const colors = [
-                    new BABYLON.Color3(1, 0, 0), // 红
-                    new BABYLON.Color3(0, 1, 0), // 绿
-                    new BABYLON.Color3(0, 0, 1), // 蓝
-                    new BABYLON.Color3(1, 1, 0), // 黄
-                    new BABYLON.Color3(1, 0, 1), // 紫
-                    new BABYLON.Color3(0, 1, 1), // 青
-                    new BABYLON.Color3(1, 0.5, 0), // 橙
-                    new BABYLON.Color3(0.5, 0, 0.5), // 深紫
-                    new BABYLON.Color3(0.5, 0.5, 0), // 橄榄
-                    new BABYLON.Color3(0, 0.5, 0.5)  // 深青
-                ];
-                return colors[Math.floor(Math.random() * colors.length)];
-            };
+            // 设置键盘快捷键
+            setupKeyboardShortcuts();
             
-            // 创建10个随机颜色的球体
-            for (let i = 0; i < 10; i++) {
-                const sphere = BABYLON.MeshBuilder.CreateSphere(
-                    `sphere${i}`,
-                    { diameter: 0.8 },
-                    scene
-                );
-                
-                // 随机位置（场景上方）
-                sphere.position = new BABYLON.Vector3(
-                    (Math.random() - 0.5) * 8, // x: -4 到 4
-                    5 + Math.random() * 3,     // y: 5 到 8
-                    (Math.random() - 0.5) * 8  // z: -4 到 4
-                );
-                
-                // 球体材质
-                const sphereMaterial = new BABYLON.StandardMaterial(`sphereMaterial${i}`, scene);
-                sphereMaterial.diffuseColor = getRandomColor();
-                sphereMaterial.specularColor = new BABYLON.Color3(0.3, 0.3, 0.3);
-                sphere.material = sphereMaterial;
-                
-                // 为球体添加物理impostor
-                sphere.physicsImpostor = new BABYLON.PhysicsImpostor(
-                    sphere,
-                    BABYLON.PhysicsImpostor.SphereImpostor,
-                    { mass: 1, restitution: 0.6, friction: 0.5 },
-                    scene
-                );
-            }
-            
-            // 创建5个随机颜色的立方体
-            for (let i = 0; i < 5; i++) {
-                const box = BABYLON.MeshBuilder.CreateBox(
-                    `box${i}`,
-                    { size: 0.8 },
-                    scene
-                );
-                
-                // 随机位置（场景上方）
-                box.position = new BABYLON.Vector3(
-                    (Math.random() - 0.5) * 8, // x: -4 到 4
-                    5 + Math.random() * 3,     // y: 5 到 8
-                    (Math.random() - 0.5) * 8  // z: -4 到 4
-                );
-                
-                // 随机旋转
-                box.rotation = new BABYLON.Vector3(
-                    Math.random() * Math.PI,
-                    Math.random() * Math.PI,
-                    Math.random() * Math.PI
-                );
-                
-                // 立方体材质
-                const boxMaterial = new BABYLON.StandardMaterial(`boxMaterial${i}`, scene);
-                boxMaterial.diffuseColor = getRandomColor();
-                boxMaterial.specularColor = new BABYLON.Color3(0.3, 0.3, 0.3);
-                box.material = boxMaterial;
-                
-                // 为立方体添加物理impostor
-                box.physicsImpostor = new BABYLON.PhysicsImpostor(
-                    box,
-                    BABYLON.PhysicsImpostor.BoxImpostor,
-                    { mass: 1.5, restitution: 0.4, friction: 0.6 },
-                    scene
-                );
-            }
+            // 碰撞监听
+            setupCollisionDetection();
             
             return scene;
         };
         
-        // 创建场景
-        const scene = createScene();
+        // ==================== 地面创建 ====================
+        function createGround(shadowGenerator) {
+            const ground = BABYLON.MeshBuilder.CreateGround(
+                "ground",
+                { width: 30, height: 30 },
+                scene
+            );
+            ground.position.y = 0;
+            ground.receiveShadows = true;
+            
+            const groundMaterial = new BABYLON.StandardMaterial("groundMaterial", scene);
+            groundMaterial.diffuseColor = new BABYLON.Color3(0.15, 0.15, 0.18);
+            groundMaterial.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+            groundMaterial.ambientColor = new BABYLON.Color3(0.2, 0.2, 0.25);
+            
+            // 添加网格纹理
+            const gridTexture = new BABYLON.DynamicTexture("gridTexture", 512, scene);
+            const ctx = gridTexture.getContext();
+            ctx.fillStyle = "#262630";
+            ctx.fillRect(0, 0, 512, 512);
+            ctx.strokeStyle = "#3a3a45";
+            ctx.lineWidth = 2;
+            for (let i = 0; i <= 512; i += 32) {
+                ctx.beginPath();
+                ctx.moveTo(i, 0);
+                ctx.lineTo(i, 512);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(0, i);
+                ctx.lineTo(512, i);
+                ctx.stroke();
+            }
+            gridTexture.update();
+            groundMaterial.diffuseTexture = gridTexture;
+            groundMaterial.diffuseTexture.uScale = 10;
+            groundMaterial.diffuseTexture.vScale = 10;
+            
+            ground.material = groundMaterial;
+            
+            ground.physicsImpostor = new BABYLON.PhysicsImpostor(
+                ground,
+                BABYLON.PhysicsImpostor.BoxImpostor,
+                { mass: 0, restitution: 0.3, friction: 0.5 },
+                scene
+            );
+        }
         
-        // 渲染循环
-        engine.runRenderLoop(function() {
-            scene.render();
+        // ==================== GUI创建 ====================
+        function createGUI() {
+            advancedTexture = BABYLON.GUI.AdvancedDynamicTexture.CreateFullscreenUI("UI");
+            
+            // 创建主控制面板
+            const panel = new BABYLON.GUI.StackPanel();
+            panel.width = "320px";
+            panel.isVertical = true;
+            panel.paddingTop = "10px";
+            panel.paddingLeft = "10px";
+            panel.horizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_RIGHT;
+            panel.verticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_TOP;
+            advancedTexture.addControl(panel);
+            
+            // 背景面板
+            const background = new BABYLON.GUI.Rectangle();
+            background.width = "340px";
+            background.height = "90%";
+            background.cornerRadius = 10;
+            background.color = "#4fc3f7";
+            background.thickness = 2;
+            background.background = "rgba(0, 0, 0, 0.85)";
+            background.horizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_RIGHT;
+            background.verticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_TOP;
+            background.paddingTop = "10px";
+            background.paddingRight = "10px";
+            advancedTexture.addControl(background);
+            
+            const scrollViewer = new BABYLON.GUI.ScrollViewer();
+            scrollViewer.width = "320px";
+            scrollViewer.height = "85%";
+            scrollViewer.horizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_RIGHT;
+            scrollViewer.verticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_TOP;
+            scrollViewer.paddingTop = "20px";
+            scrollViewer.paddingRight = "20px";
+            scrollViewer.thumbLength = 0.5;
+            advancedTexture.addControl(scrollViewer);
+            
+            const contentPanel = new BABYLON.GUI.StackPanel();
+            contentPanel.width = "300px";
+            contentPanel.isVertical = true;
+            scrollViewer.addControl(contentPanel);
+            
+            // 标题
+            const title = createLabel("🎮 物理沙盒控制台", "24px", "#4fc3f7");
+            contentPanel.addControl(title);
+            
+            // 分隔线
+            contentPanel.addControl(createSeparator());
+            
+            // ===== 物体生成器部分 =====
+            const objectTitle = createLabel("📦 物体生成器", "18px", "#81c784");
+            contentPanel.addControl(objectTitle);
+            
+            // 物体类型选择
+            const typePanel = new BABYLON.GUI.StackPanel();
+            typePanel.isVertical = false;
+            typePanel.height = "40px";
+            contentPanel.addControl(typePanel);
+            
+            const typeLabel = createLabel("类型:", "14px", "white");
+            typeLabel.width = "50px";
+            typePanel.addControl(typeLabel);
+            
+            let selectedType = "sphere";
+            const typeButtons = ["sphere", "box", "cylinder", "cone"];
+            const typeNames = ["球体", "立方体", "圆柱", "锥体"];
+            
+            typeButtons.forEach((type, index) => {
+                const btn = BABYLON.GUI.Button.CreateSimpleButton(type, typeNames[index]);
+                btn.width = "55px";
+                btn.height = "30px";
+                btn.color = type === selectedType ? "#4fc3f7" : "white";
+                btn.background = type === selectedType ? "rgba(79, 195, 247, 0.3)" : "rgba(100, 100, 100, 0.3)";
+                btn.cornerRadius = 5;
+                btn.fontSize = "12px";
+                btn.onPointerClickObservable.add(() => {
+                    selectedType = type;
+                    typeButtons.forEach((t, i) => {
+                        const b = typePanel.getChildren()[i + 1];
+                        b.color = t === selectedType ? "#4fc3f7" : "white";
+                        b.background = t === selectedType ? "rgba(79, 195, 247, 0.3)" : "rgba(100, 100, 100, 0.3)";
+                    });
+                });
+                typePanel.addControl(btn);
+            });
+            
+            // 物理属性滑块
+            const massSlider = createSlider("质量", 0.1, 10, 1, "kg");
+            contentPanel.addControl(massSlider.container);
+            
+            const restitutionSlider = createSlider("弹性", 0, 1, 0.6, "");
+            contentPanel.addControl(restitutionSlider.container);
+            
+            const frictionSlider = createSlider("摩擦力", 0, 1, 0.5, "");
+            contentPanel.addControl(frictionSlider.container);
+            
+            const sizeSlider = createSlider("大小", 0.3, 2, 0.8, "m");
+            contentPanel.addControl(sizeSlider.container);
+            
+            // 颜色选择
+            const colorPanel = new BABYLON.GUI.StackPanel();
+            colorPanel.isVertical = false;
+            colorPanel.height = "40px";
+            contentPanel.addControl(colorPanel);
+            
+            const colorLabel = createLabel("颜色:", "14px", "white");
+            colorLabel.width = "50px";
+            colorPanel.addControl(colorLabel);
+            
+            const colors = [
+                new BABYLON.Color3(1, 0.2, 0.2),
+                new BABYLON.Color3(0.2, 1, 0.2),
+                new BABYLON.Color3(0.2, 0.4, 1),
+                new BABYLON.Color3(1, 1, 0.2),
+                new BABYLON.Color3(1, 0.2, 1),
+                new BABYLON.Color3(0.2, 1, 1),
+                new BABYLON.Color3(1, 0.6, 0.2),
+                new BABYLON.Color3(0.8, 0.2, 0.8)
+            ];
+            let selectedColor = colors[0];
+            
+            colors.forEach((color, index) => {
+                const colorBtn = BABYLON.GUI.Button.CreateSimpleButton("color" + index, "");
+                colorBtn.width = "25px";
+                colorBtn.height = "25px";
+                colorBtn.background = `rgb(${color.r * 255}, ${color.g * 255}, ${color.b * 255})`;
+                colorBtn.thickness = index === 0 ? 3 : 1;
+                colorBtn.color = index === 0 ? "white" : "transparent";
+                colorBtn.cornerRadius = 5;
+                colorBtn.onPointerClickObservable.add(() => {
+                    selectedColor = color;
+                    for (let i = 0; i < colors.length; i++) {
+                        const btn = colorPanel.getChildren()[i + 1];
+                        btn.thickness = i === index ? 3 : 1;
+                        btn.color = i === index ? "white" : "transparent";
+                    }
+                });
+                colorPanel.addControl(colorBtn);
+            });
+            
+            // 添加物体按钮
+            const addButton = BABYLON.GUI.Button.CreateSimpleButton("addBtn", "➕ 添加物体");
+            addButton.width = "280px";
+            addButton.height = "40px";
+            addButton.color = "white";
+            addButton.background = "rgba(79, 195, 247, 0.6)";
+            addButton.cornerRadius = 8;
+            addButton.fontSize = "16px";
+            addButton.onPointerClickObservable.add(() => {
+                const pos = new BABYLON.Vector3(
+                    (Math.random() - 0.5) * 10,
+                    5 + Math.random() * 5,
+                    (Math.random() - 0.5) * 10
+                );
+                createPhysicsObject(
+                    selectedType,
+                    pos,
+                    sizeSlider.slider.value,
+                    massSlider.slider.value,
+                    restitutionSlider.slider.value,
+                    frictionSlider.slider.value,
+                    selectedColor
+                );
+            });
+            contentPanel.addControl(addButton);
+            
+            contentPanel.addControl(createSeparator());
+            
+            // ===== 约束系统部分 =====
+            const constraintTitle = createLabel("🔗 约束系统", "18px", "#ff8a65");
+            contentPanel.addControl(constraintTitle);
+            
+            const constraintTypes = ["spring", "hinge", "distance"];
+            const constraintNames = ["弹簧约束", "铰链约束", "距离约束"];
+            let selectedConstraint = "spring";
+            
+            const constraintPanel = new BABYLON.GUI.StackPanel();
+            constraintPanel.isVertical = false;
+            constraintPanel.height = "40px";
+            contentPanel.addControl(constraintPanel);
+            
+            constraintTypes.forEach((type, index) => {
+                const btn = BABYLON.GUI.Button.CreateSimpleButton(type, constraintNames[index]);
+                btn.width = "90px";
+                btn.height = "30px";
+                btn.color = type === selectedConstraint ? "#ff8a65" : "white";
+                btn.background = type === selectedConstraint ? "rgba(255, 138, 101, 0.3)" : "rgba(100, 100, 100, 0.3)";
+                btn.cornerRadius = 5;
+                btn.fontSize = "12px";
+                btn.onPointerClickObservable.add(() => {
+                    selectedConstraint = type;
+                    constraintTypes.forEach((t, i) => {
+                        const b = constraintPanel.getChildren()[i];
+                        b.color = t === selectedConstraint ? "#ff8a65" : "white";
+                        b.background = t === selectedConstraint ? "rgba(255, 138, 101, 0.3)" : "rgba(100, 100, 100, 0.3)";
+                    });
+                });
+                constraintPanel.addControl(btn);
+            });
+            
+            const constraintHelp = createLabel("Shift+点击两个物体创建约束", "12px", "#aaa");
+            contentPanel.addControl(constraintHelp);
+            
+            const clearConstraintsBtn = BABYLON.GUI.Button.CreateSimpleButton("clearConstraints", "🗑️ 清除所有约束");
+            clearConstraintsBtn.width = "280px";
+            clearConstraintsBtn.height = "35px";
+            clearConstraintsBtn.color = "white";
+            clearConstraintsBtn.background = "rgba(255, 138, 101, 0.5)";
+            clearConstraintsBtn.cornerRadius = 5;
+            clearConstraintsBtn.fontSize = "14px";
+            clearConstraintsBtn.onPointerClickObservable.add(() => {
+                clearAllConstraints();
+            });
+            contentPanel.addControl(clearConstraintsBtn);
+            
+            contentPanel.addControl(createSeparator());
+            
+            // ===== 特效控制部分 =====
+            const effectTitle = createLabel("✨ 特效控制", "18px", "#ffd54f");
+            contentPanel.addControl(effectTitle);
+            
+            const trajectoryCheck = createCheckbox("显示轨迹", true);
+            contentPanel.addControl(trajectoryCheck.container);
+            
+            const collisionCheck = createCheckbox("碰撞粒子", true);
+            contentPanel.addControl(collisionCheck.container);
+            
+            const explosionBtn = BABYLON.GUI.Button.CreateSimpleButton("explosion", "💥 随机爆炸");
+            explosionBtn.width = "280px";
+            explosionBtn.height = "35px";
+            explosionBtn.color = "white";
+            explosionBtn.background = "rgba(255, 213, 79, 0.5)";
+            explosionBtn.cornerRadius = 5;
+            explosionBtn.fontSize = "14px";
+            explosionBtn.onPointerClickObservable.add(() => {
+                createRandomExplosion();
+            });
+            contentPanel.addControl(explosionBtn);
+            
+            contentPanel.addControl(createSeparator());
+            
+            // ===== 时间控制部分 =====
+            const timeTitle = createLabel("⏱️ 时间控制", "18px", "#ba68c8");
+            contentPanel.addControl(timeTitle);
+            
+            const timeSlider = createSlider("时间缩放", 0.1, 2, 1, "x");
+            contentPanel.addControl(timeSlider.container);
+            
+            timeSlider.slider.onValueChangedObservable.add((value) => {
+                timeScale = value;
+            });
+            
+            const pauseBtn = BABYLON.GUI.Button.CreateSimpleButton("pause", "⏸️ 暂停/继续");
+            pauseBtn.width = "280px";
+            pauseBtn.height = "35px";
+            pauseBtn.color = "white";
+            pauseBtn.background = "rgba(186, 104, 200, 0.5)";
+            pauseBtn.cornerRadius = 5;
+            pauseBtn.fontSize = "14px";
+            pauseBtn.onPointerClickObservable.add(() => {
+                togglePause();
+            });
+            contentPanel.addControl(pauseBtn);
+            
+            contentPanel.addControl(createSeparator());
+            
+            // ===== 预设场景部分 =====
+            const presetTitle = createLabel("🎯 预设场景", "18px", "#4db6ac");
+            contentPanel.addControl(presetTitle);
+            
+            const presets = [
+                { name: "多米诺骨牌", id: "domino" },
+                { name: "牛顿摆", id: "newton" },
+                { name: "堆叠挑战", id: "stack" },
+                { name: "弹球机", id: "pinball" },
+                { name: "破坏测试", id: "destruction" }
+            ];
+            
+            presets.forEach((preset, index) => {
+                const btn = BABYLON.GUI.Button.CreateSimpleButton(preset.id, `${index + 1}. ${preset.name}`);
+                btn.width = "280px";
+                btn.height = "30px";
+                btn.color = "white";
+                btn.background = "rgba(77, 182, 172, 0.4)";
+                btn.cornerRadius = 5;
+                btn.fontSize = "13px";
+                btn.margin = "2px";
+                btn.onPointerClickObservable.add(() => {
+                    loadPresetScene(preset.id);
+                });
+                contentPanel.addControl(btn);
+            });
+            
+            contentPanel.addControl(createSeparator());
+            
+            // ===== 场景管理部分 =====
+            const manageTitle = createLabel("💾 场景管理", "18px", "#e57373");
+            contentPanel.addControl(manageTitle);
+            
+            const saveBtn = BABYLON.GUI.Button.CreateSimpleButton("save", "💾 保存快照");
+            saveBtn.width = "135px";
+            saveBtn.height = "35px";
+            saveBtn.color = "white";
+            saveBtn.background = "rgba(229, 115, 115, 0.5)";
+            saveBtn.cornerRadius = 5;
+            saveBtn.fontSize = "14px";
+            saveBtn.onPointerClickObservable.add(() => {
+                saveSceneSnapshot();
+            });
+            
+            const loadBtn = BABYLON.GUI.Button.CreateSimpleButton("load", "📂 加载快照");
+            loadBtn.width = "135px";
+            loadBtn.height = "35px";
+            loadBtn.color = "white";
+            loadBtn.background = "rgba(229, 115, 115, 0.5)";
+            loadBtn.cornerRadius = 5;
+            loadBtn.fontSize = "14px";
+            loadBtn.onPointerClickObservable.add(() => {
+                loadSceneSnapshot();
+            });
+            
+            const managePanel = new BABYLON.GUI.StackPanel();
+            managePanel.isVertical = false;
+            managePanel.height = "40px";
+            managePanel.addControl(saveBtn);
+            managePanel.addControl(loadBtn);
+            contentPanel.addControl(managePanel);
+            
+            const resetBtn = BABYLON.GUI.Button.CreateSimpleButton("reset", "🔄 重置场景");
+            resetBtn.width = "280px";
+            resetBtn.height = "35px";
+            resetBtn.color = "white";
+            resetBtn.background = "rgba(255, 50, 50, 0.5)";
+            resetBtn.cornerRadius = 5;
+            resetBtn.fontSize = "14px";
+            resetBtn.onPointerClickObservable.add(() => {
+                resetScene();
+            });
+            contentPanel.addControl(resetBtn);
+            
+            // 存储引用以便后续使用
+            contentPanel.trajectoryCheck = trajectoryCheck;
+            contentPanel.collisionCheck = collisionCheck;
+            contentPanel.selectedConstraint = () => selectedConstraint;
+        }
+        
+        // ==================== GUI辅助函数 ====================
+        function createLabel(text, fontSize, color) {
+            const label = new BABYLON.GUI.TextBlock();
+            label.text = text;
+            label.fontSize = fontSize;
+            label.color = color;
+            label.height = "30px";
+            label.textHorizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
+            label.paddingLeft = "10px";
+            return label;
+        }
+        
+        function createSeparator() {
+            const sep = new BABYLON.GUI.Rectangle();
+            sep.width = "280px";
+            sep.height = "2px";
+            sep.background = "rgba(255, 255, 255, 0.2)";
+            sep.margin = "10px";
+            return sep;
+        }
+        
+        function createSlider(label, min, max, value, unit) {
+            const container = new BABYLON.GUI.StackPanel();
+            container.height = "60px";
+            
+            const header = new BABYLON.GUI.TextBlock();
+            header.text = `${label}: ${value}${unit}`;
+            header.fontSize = "14px";
+            header.color = "white";
+            header.height = "25px";
+            header.textHorizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
+            container.addControl(header);
+            
+            const slider = new BABYLON.GUI.Slider();
+            slider.minimum = min;
+            slider.maximum = max;
+            slider.value = value;
+            slider.height = "25px";
+            slider.color = "#4fc3f7";
+            slider.background = "rgba(100, 100, 100, 0.5)";
+            slider.onValueChangedObservable.add((v) => {
+                header.text = `${label}: ${v.toFixed(2)}${unit}`;
+            });
+            container.addControl(slider);
+            
+            return { container, slider };
+        }
+        
+        function createCheckbox(label, checked) {
+            const container = new BABYLON.GUI.StackPanel();
+            container.isVertical = false;
+            container.height = "30px";
+            
+            const checkbox = new BABYLON.GUI.Checkbox();
+            checkbox.width = "20px";
+            checkbox.height = "20px";
+            checkbox.isChecked = checked;
+            checkbox.color = "#4fc3f7";
+            checkbox.background = "rgba(100, 100, 100, 0.5)";
+            
+            const labelBlock = new BABYLON.GUI.TextBlock();
+            labelBlock.text = label;
+            labelBlock.fontSize = "14px";
+            labelBlock.color = "white";
+            labelBlock.width = "200px";
+            labelBlock.textHorizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
+            labelBlock.paddingLeft = "10px";
+            
+            container.addControl(checkbox);
+            container.addControl(labelBlock);
+            
+            return { container, checkbox };
+        }
+        
+        // ==================== 物理物体创建 ====================
+        function createPhysicsObject(type, position, size, mass, restitution, friction, color, shadowGenerator) {
+            objectCounter++;
+            let mesh;
+            let impostorType;
+            
+            switch(type) {
+                case "sphere":
+                    mesh = BABYLON.MeshBuilder.CreateSphere(
+                        `object_${objectCounter}`,
+                        { diameter: size },
+                        scene
+                    );
+                    impostorType = BABYLON.PhysicsImpostor.SphereImpostor;
+                    break;
+                case "box":
+                    mesh = BABYLON.MeshBuilder.CreateBox(
+                        `object_${objectCounter}`,
+                        { size: size },
+                        scene
+                    );
+                    impostorType = BABYLON.PhysicsImpostor.BoxImpostor;
+                    break;
+                case "cylinder":
+                    mesh = BABYLON.MeshBuilder.CreateCylinder(
+                        `object_${objectCounter}`,
+                        { diameter: size, height: size * 1.5 },
+                        scene
+                    );
+                    impostorType = BABYLON.PhysicsImpostor.CylinderImpostor;
+                    break;
+                case "cone":
+                    mesh = BABYLON.MeshBuilder.CreateCylinder(
+                        `object_${objectCounter}`,
+                        { diameterTop: 0, diameterBottom: size, height: size * 1.5 },
+                        scene
+                    );
+                    impostorType = BABYLON.PhysicsImpostor.CylinderImpostor;
+                    break;
+            }
+            
+            mesh.position = position;
+            mesh.rotation = new BABYLON.Vector3(
+                Math.random() * Math.PI,
+                Math.random() * Math.PI,
+                Math.random() * Math.PI
+            );
+            
+            // 材质
+            const material = new BABYLON.StandardMaterial(`mat_${objectCounter}`, scene);
+            material.diffuseColor = color;
+            material.specularColor = new BABYLON.Color3(0.4, 0.4, 0.4);
+            material.ambientColor = new BABYLON.Color3(0.2, 0.2, 0.2);
+            mesh.material = material;
+            
+            // 阴影
+            if (shadowGenerator) {
+                shadowGenerator.addShadowCaster(mesh);
+            }
+            
+            // 物理
+            mesh.physicsImpostor = new BABYLON.PhysicsImpostor(
+                mesh,
+                impostorType,
+                { mass: mass, restitution: restitution, friction: friction },
+                scene
+            );
+            
+            // 存储原始属性用于重置
+            mesh.originalProperties = {
+                type: type,
+                size: size,
+                mass: mass,
+                restitution: restitution,
+                friction: friction,
+                color: color.clone()
+            };
+            
+            // 创建轨迹线
+            createTrajectory(mesh);
+            
+            return mesh;
+        }
+        
+        // ==================== 轨迹系统 ====================
+        function createTrajectory(mesh) {
+            const points = [];
+            const maxPoints = 100;
+            
+            const trajectory = {
+                mesh: mesh,
+                points: points,
+                maxPoints: maxPoints,
+                lineMesh: null,
+                enabled: true
+            };
+            
+            trajectories.set(mesh.name, trajectory);
+        }
+        
+        function updateTrajectories() {
+            trajectories.forEach((trajectory, name) => {
+                if (!trajectory.enabled || trajectory.mesh.isDisposed()) {
+                    if (trajectory.lineMesh) {
+                        trajectory.lineMesh.dispose();
+                    }
+                    trajectories.delete(name);
+                    return;
+                }
+                
+                const mesh = trajectory.mesh;
+                trajectory.points.push(mesh.position.clone());
+                
+                if (trajectory.points.length > trajectory.maxPoints) {
+                    trajectory.points.shift();
+                }
+                
+                if (trajectory.points.length > 1) {
+                    if (trajectory.lineMesh) {
+                        trajectory.lineMesh.dispose();
+                    }
+                    
+                    trajectory.lineMesh = BABYLON.MeshBuilder.CreateLines(
+                        "trajectory_" + name,
+                        { points: trajectory.points },
+                        scene
+                    );
+                    trajectory.lineMesh.color = new BABYLON.Color3(0.3, 0.8, 1);
+                    trajectory.lineMesh.alpha = 0.5;
+                }
+            });
+        }
+        
+        // ==================== 约束系统 ====================
+        function createConstraint(meshA, meshB, type) {
+            if (!meshA.physicsImpostor || !meshB.physicsImpostor) return;
+            
+            let joint;
+            const pivotA = new BABYLON.Vector3(0, 0, 0);
+            const pivotB = meshB.position.subtract(meshA.position);
+            
+            switch(type) {
+                case "spring":
+                    joint = new BABYLON.SpringJoint(
+                        "spring",
+                        meshA.physicsImpostor,
+                        meshB.physicsImpostor,
+                        5, // 长度
+                        100, // 刚度
+                        0.5 // 阻尼
+                    );
+                    break;
+                case "hinge":
+                    joint = new BABYLON.HingeJoint(
+                        "hinge",
+                        meshA.physicsImpostor,
+                        pivotA,
+                        new BABYLON.Vector3(0, 1, 0),
+                        meshB.physicsImpostor,
+                        pivotB,
+                        new BABYLON.Vector3(0, 1, 0)
+                    );
+                    break;
+                case "distance":
+                    joint = new BABYLON.DistanceJoint(
+                        "distance",
+                        meshA.physicsImpostor,
+                        meshB.physicsImpostor,
+                        meshA.position.distanceFrom(meshB.position)
+                    );
+                    break;
+            }
+            
+            if (joint) {
+                joints.push({ joint, meshA, meshB, type });
+                
+                // 可视化约束
+                visualizeConstraint(meshA, meshB, type);
+            }
+        }
+        
+        function visualizeConstraint(meshA, meshB, type) {
+            const line = BABYLON.MeshBuilder.CreateLines(
+                "constraint_line",
+                { points: [meshA.position, meshB.position] },
+                scene
+            );
+            
+            const colors = {
+                spring: new BABYLON.Color3(0.2, 1, 0.2),
+                hinge: new BABYLON.Color3(1, 0.5, 0.2),
+                distance: new BABYLON.Color3(0.2, 0.5, 1)
+            };
+            
+            line.color = colors[type] || new BABYLON.Color3(1, 1, 1);
+            line.alpha = 0.6;
+            
+            // 更新线条位置
+            scene.onBeforeRenderObservable.add(() => {
+                if (!meshA.isDisposed() && !meshB.isDisposed()) {
+                    const positions = new Float32Array([
+                        meshA.position.x, meshA.position.y, meshA.position.z,
+                        meshB.position.x, meshB.position.y, meshB.position.z
+                    ]);
+                    line.updateVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+                } else {
+                    line.dispose();
+                }
+            });
+        }
+        
+        function clearAllConstraints() {
+            joints.forEach(({ joint }) => {
+                if (joint && joint.physicsJoint) {
+                    scene.getPhysicsEngine().removeJoint(joint);
+                }
+            });
+            joints = [];
+        }
+        
+        // ==================== 粒子系统 ====================
+        function createCollisionParticles(position, intensity = 1) {
+            const particleSystem = new BABYLON.ParticleSystem(
+                "collisionParticles",
+                50 * intensity,
+                scene
+            );
+            
+            particleSystem.particleTexture = new BABYLON.Texture(
+                "https://www.babylonjs-playground.com/textures/flare.png",
+                scene
+            );
+            
+            particleSystem.emitter = position;
+            particleSystem.minEmitBox = new BABYLON.Vector3(-0.1, 0, -0.1);
+            particleSystem.maxEmitBox = new BABYLON.Vector3(0.1, 0, 0.1);
+            
+            particleSystem.color1 = new BABYLON.Color4(1, 0.8, 0.2, 1);
+            particleSystem.color2 = new BABYLON.Color4(1, 0.4, 0.1, 1);
+            particleSystem.colorDead = new BABYLON.Color4(0.5, 0.1, 0, 0);
+            
+            particleSystem.minSize = 0.05;
+            particleSystem.maxSize = 0.15;
+            
+            particleSystem.minLifeTime = 0.2;
+            particleSystem.maxLifeTime = 0.5;
+            
+            particleSystem.emitRate = 100 * intensity;
+            particleSystem.blendMode = BABYLON.ParticleSystem.BLENDMODE_ONEONE;
+            
+            particleSystem.gravity = new BABYLON.Vector3(0, -5, 0);
+            particleSystem.direction1 = new BABYLON.Vector3(-1, 1, -1);
+            particleSystem.direction2 = new BABYLON.Vector3(1, 1, 1);
+            particleSystem.minAngularSpeed = 0;
+            particleSystem.maxAngularSpeed = Math.PI;
+            particleSystem.minEmitPower = 1;
+            particleSystem.maxEmitPower = 3;
+            particleSystem.updateSpeed = 0.01;
+            
+            particleSystem.start();
+            particleSystems.push(particleSystem);
+            
+            setTimeout(() => {
+                particleSystem.stop();
+                setTimeout(() => {
+                    particleSystem.dispose();
+                    const index = particleSystems.indexOf(particleSystem);
+                    if (index > -1) particleSystems.splice(index, 1);
+                }, 1000);
+            }, 300);
+        }
+        
+        function createExplosion(position, radius = 5, force = 10) {
+            // 冲击波粒子
+            const particleSystem = new BABYLON.ParticleSystem(
+                "explosion",
+                200,
+                scene
+            );
+            
+            particleSystem.particleTexture = new BABYLON.Texture(
+                "https://www.babylonjs-playground.com/textures/flare.png",
+                scene
+            );
+            
+            particleSystem.emitter = position;
+            particleSystem.minEmitBox = new BABYLON.Vector3(-0.2, -0.2, -0.2);
+            particleSystem.maxEmitBox = new BABYLON.Vector3(0.2, 0.2, 0.2);
+            
+            particleSystem.color1 = new BABYLON.Color4(1, 0.3, 0, 1);
+            particleSystem.color2 = new BABYLON.Color4(1, 0.8, 0.2, 1);
+            particleSystem.colorDead = new BABYLON.Color4(0.3, 0.1, 0, 0);
+            
+            particleSystem.minSize = 0.1;
+            particleSystem.maxSize = 0.4;
+            
+            particleSystem.minLifeTime = 0.5;
+            particleSystem.maxLifeTime = 1.0;
+            
+            particleSystem.emitRate = 500;
+            particleSystem.burst(100);
+            particleSystem.blendMode = BABYLON.ParticleSystem.BLENDMODE_ONEONE;
+            
+            particleSystem.gravity = new BABYLON.Vector3(0, -2, 0);
+            particleSystem.direction1 = new BABYLON.Vector3(-1, -1, -1);
+            particleSystem.direction2 = new BABYLON.Vector3(1, 1, 1);
+            particleSystem.minEmitPower = 5;
+            particleSystem.maxEmitPower = 15;
+            
+            particleSystem.start();
+            
+            // 物理冲击波
+            scene.meshes.forEach(mesh => {
+                if (mesh.physicsImpostor && mesh.name !== "ground") {
+                    const distance = BABYLON.Vector3.Distance(mesh.position, position);
+                    if (distance < radius && distance > 0.1) {
+                        const direction = mesh.position.subtract(position).normalize();
+                        const impulse = direction.scale(force * (1 - distance / radius));
+                        mesh.physicsImpostor.applyImpulse(impulse, mesh.position);
+                    }
+                }
+            });
+            
+            // 创建爆炸光晕
+            const light = new BABYLON.PointLight("explosionLight", position, scene);
+            light.diffuse = new BABYLON.Color3(1, 0.5, 0);
+            light.intensity = 2;
+            light.range = radius * 2;
+            
+            // 动画
+            let frame = 0;
+            const animObserver = scene.onBeforeRenderObservable.add(() => {
+                frame++;
+                light.intensity = 2 * (1 - frame / 30);
+                if (frame > 30) {
+                    light.dispose();
+                    scene.onBeforeRenderObservable.remove(animObserver);
+                }
+            });
+            
+            setTimeout(() => {
+                particleSystem.stop();
+                setTimeout(() => particleSystem.dispose(), 1000);
+            }, 500);
+        }
+        
+        function createRandomExplosion() {
+            const x = (Math.random() - 0.5) * 10;
+            const z = (Math.random() - 0.5) * 10;
+            createExplosion(new BABYLON.Vector3(x, 2, z), 8, 15);
+        }
+        
+        // ==================== 碰撞检测 ====================
+        function setupCollisionDetection() {
+            scene.onBeforeRenderObservable.add(() => {
+                scene.meshes.forEach(mesh => {
+                    if (mesh.physicsImpostor && mesh.name !== "ground") {
+                        mesh.physicsImpostor.onCollideEvent = (collider, collidedWith) => {
+                            if (collidedWith.object.name === "ground") return;
+                            
+                            const velocity = mesh.physicsImpostor.getLinearVelocity();
+                            const speed = velocity.length();
+                            
+                            if (speed > 2) {
+                                const contactPoint = mesh.position.add(collidedWith.object.position).scale(0.5);
+                                createCollisionParticles(contactPoint, Math.min(speed / 5, 3));
+                            }
+                        };
+                    }
+                });
+            });
+        }
+        
+        // ==================== 力场系统 ====================
+        function createForceField(position, type) {
+            const field = {
+                position: position,
+                type: type, // 'attract' or 'repel'
+                strength: 10,
+                radius: 5
+            };
+            
+            forceFields.push(field);
+            
+            // 可视化
+            const sphere = BABYLON.MeshBuilder.CreateSphere(
+                "forceField",
+                { diameter: 0.5 },
+                scene
+            );
+            sphere.position = position;
+            
+            const material = new BABYLON.StandardMaterial("forceFieldMat", scene);
+            material.diffuseColor = type === "attract" ? 
+                new BABYLON.Color3(0.2, 0.8, 0.2) : 
+                new BABYLON.Color3(0.8, 0.2, 0.2);
+            material.emissiveColor = material.diffuseColor.scale(0.5);
+            material.alpha = 0.7;
+            sphere.material = material;
+            
+            // 范围指示器
+            const rangeSphere = BABYLON.MeshBuilder.CreateSphere(
+                "forceFieldRange",
+                { diameter: field.radius * 2 },
+                scene
+            );
+            rangeSphere.position = position;
+            const rangeMat = new BABYLON.StandardMaterial("rangeMat", scene);
+            rangeMat.diffuseColor = material.diffuseColor;
+            rangeMat.alpha = 0.1;
+            rangeMat.wireframe = true;
+            rangeSphere.material = rangeMat;
+            
+            field.mesh = sphere;
+            field.rangeMesh = rangeSphere;
+            
+            // 5秒后移除
+            setTimeout(() => {
+                sphere.dispose();
+                rangeSphere.dispose();
+                const index = forceFields.indexOf(field);
+                if (index > -1) forceFields.splice(index, 1);
+            }, 10000);
+        }
+        
+        function updateForceFields() {
+            forceFields.forEach(field => {
+                scene.meshes.forEach(mesh => {
+                    if (mesh.physicsImpostor && mesh.name !== "ground" && mesh.name !== "forceField") {
+                        const distance = BABYLON.Vector3.Distance(mesh.position, field.position);
+                        if (distance < field.radius && distance > 0.1) {
+                            const direction = field.type === "attract" ?
+                                field.position.subtract(mesh.position).normalize() :
+                                mesh.position.subtract(field.position).normalize();
+                            
+                            const force = direction.scale(field.strength * (1 - distance / field.radius));
+                            mesh.physicsImpostor.applyForce(force, mesh.position);
+                        }
+                    }
+                });
+            });
+        }
+        
+        // ==================== 交互系统 ====================
+        function setupInteractions(shadowGenerator) {
+            let startingPoint;
+            let currentMesh;
+            
+            scene.onPointerObservable.add((pointerInfo) => {
+                switch (pointerInfo.type) {
+                    case BABYLON.PointerEventTypes.POINTERDOWN:
+                        if (pointerInfo.pickInfo.hit && pointerInfo.pickInfo.pickedMesh.name !== "ground") {
+                            const mesh = pointerInfo.pickInfo.pickedMesh;
+                            
+                            // Shift+点击创建约束
+                            if (pointerInfo.event.shiftKey) {
+                                if (!constraintStartMesh) {
+                                    constraintStartMesh = mesh;
+                                    highlightMesh(mesh, new BABYLON.Color3(0, 1, 0));
+                                } else if (constraintStartMesh !== mesh) {
+                                    const constraintType = advancedTexture.getChildren()[0].selectedConstraint ? 
+                                        advancedTexture.getChildren()[0].selectedConstraint() : "spring";
+                                    createConstraint(constraintStartMesh, mesh, constraintType);
+                                    unhighlightMesh(constraintStartMesh);
+                                    constraintStartMesh = null;
+                                }
+                                return;
+                            }
+                            
+                            // Ctrl+点击放置力场
+                            if (pointerInfo.event.ctrlKey) {
+                                const type = pointerInfo.event.altKey ? "repel" : "attract";
+                                createForceField(pointerInfo.pickInfo.pickedPoint, type);
+                                return;
+                            }
+                            
+                            // 普通点击 - 选中/拖拽
+                            if (selectedMesh && selectedMesh !== mesh) {
+                                unhighlightMesh(selectedMesh);
+                            }
+                            selectedMesh = mesh;
+                            highlightMesh(mesh, new BABYLON.Color3(1, 1, 0));
+                            
+                            // 开始拖拽
+                            currentMesh = mesh;
+                            startingPoint = pointerInfo.pickInfo.pickedPoint;
+                            if (currentMesh.physicsImpostor) {
+                                currentMesh.physicsImpostor.setLinearVelocity(new BABYLON.Vector3(0, 0, 0));
+                                currentMesh.physicsImpostor.setAngularVelocity(new BABYLON.Vector3(0, 0, 0));
+                            }
+                        }
+                        break;
+                        
+                    case BABYLON.PointerEventTypes.POINTERUP:
+                        currentMesh = null;
+                        break;
+                        
+                    case BABYLON.PointerEventTypes.POINTERMOVE:
+                        if (currentMesh && pointerInfo.pickInfo.hit) {
+                            const newPosition = pointerInfo.pickInfo.pickedPoint;
+                            const diff = newPosition.subtract(startingPoint);
+                            currentMesh.position.addInPlace(diff);
+                            startingPoint = newPosition;
+                            
+                            if (currentMesh.physicsImpostor) {
+                                currentMesh.physicsImpostor.setLinearVelocity(new BABYLON.Vector3(0, 0, 0));
+                                currentMesh.physicsImpostor.setAngularVelocity(new BABYLON.Vector3(0, 0, 0));
+                            }
+                        }
+                        break;
+                        
+                    case BABYLON.PointerEventTypes.POINTERDOUBLETAP:
+                        if (pointerInfo.pickInfo.hit && pointerInfo.pickInfo.pickedMesh.name !== "ground") {
+                            createExplosion(pointerInfo.pickInfo.pickedMesh.position, 5, 8);
+                            pointerInfo.pickInfo.pickedMesh.dispose();
+                        }
+                        break;
+                }
+            });
+        }
+        
+        function highlightMesh(mesh, color) {
+            if (mesh.material) {
+                mesh.originalEmissive = mesh.material.emissiveColor.clone();
+                mesh.material.emissiveColor = color.scale(0.3);
+            }
+        }
+        
+        function unhighlightMesh(mesh) {
+            if (mesh.material && mesh.originalEmissive) {
+                mesh.material.emissiveColor = mesh.originalEmissive;
+            }
+        }
+        
+        // ==================== 键盘快捷键 ====================
+        function setupKeyboardShortcuts() {
+            scene.onKeyboardObservable.add((kbInfo) => {
+                if (kbInfo.type === BABYLON.KeyboardEventTypes.KEYDOWN) {
+                    switch(kbInfo.event.key.toLowerCase()) {
+                        case " ":
+                            togglePause();
+                            break;
+                        case "s":
+                            if (kbInfo.event.ctrlKey) {
+                                kbInfo.event.preventDefault();
+                            }
+                            saveSceneSnapshot();
+                            break;
+                        case "l":
+                            loadSceneSnapshot();
+                            break;
+                        case "r":
+                            resetScene();
+                            break;
+                        case "d":
+                            toggleDebugMode();
+                            break;
+                        case "delete":
+                            if (selectedMesh && selectedMesh.name !== "ground") {
+                                selectedMesh.dispose();
+                                selectedMesh = null;
+                            }
+                            break;
+                        case "1":
+                            loadPresetScene("domino");
+                            break;
+                        case "2":
+                            loadPresetScene("newton");
+                            break;
+                        case "3":
+                            loadPresetScene("stack");
+                            break;
+                        case "4":
+                            loadPresetScene("pinball");
+                            break;
+                        case "5":
+                            loadPresetScene("destruction");
+                            break;
+                    }
+                }
+            });
+        }
+        
+        // ==================== 时间控制 ====================
+        function togglePause() {
+            isPaused = !isPaused;
+            if (isPaused) {
+                physicsPlugin.setTimeStep(0);
+            } else {
+                physicsPlugin.setTimeStep(1 / 60 * timeScale);
+            }
+        }
+        
+        // ==================== 场景快照 ====================
+        function saveSceneSnapshot() {
+            const snapshot = {
+                objects: [],
+                timestamp: Date.now()
+            };
+            
+            scene.meshes.forEach(mesh => {
+                if (mesh.physicsImpostor && mesh.name !== "ground") {
+                    snapshot.objects.push({
+                        name: mesh.name,
+                        type: mesh.originalProperties?.type || "box",
+                        position: mesh.position.clone(),
+                        rotation: mesh.rotation.clone(),
+                        scaling: mesh.scaling.clone(),
+                        properties: mesh.originalProperties || {}
+                    });
+                }
+            });
+            
+            sceneSnapshots.push(snapshot);
+            
+            // 显示提示
+            showNotification("场景已保存!");
+        }
+        
+        function loadSceneSnapshot() {
+            if (sceneSnapshots.length === 0) {
+                showNotification("没有可用的快照!");
+                return;
+            }
+            
+            const snapshot = sceneSnapshots[sceneSnapshots.length - 1];
+            
+            // 清除现有物体
+            clearAllObjects();
+            
+            // 恢复物体
+            snapshot.objects.forEach(obj => {
+                const mesh = createPhysicsObject(
+                    obj.type,
+                    obj.position,
+                    obj.properties.size || 1,
+                    obj.properties.mass || 1,
+                    obj.properties.restitution || 0.5,
+                    obj.properties.friction || 0.5,
+                    obj.properties.color || new BABYLON.Color3(1, 0, 0)
+                );
+                mesh.rotation = obj.rotation;
+                mesh.scaling = obj.scaling;
+            });
+            
+            showNotification("场景已加载!");
+        }
+        
+        function clearAllObjects() {
+            const toRemove = [];
+            scene.meshes.forEach(mesh => {
+                if (mesh.name !== "ground" && !mesh.name.startsWith("trajectory") && !mesh.name.startsWith("constraint")) {
+                    toRemove.push(mesh);
+                }
+            });
+            toRemove.forEach(mesh => mesh.dispose());
+            trajectories.clear();
+        }
+        
+        function resetScene() {
+            clearAllObjects();
+            clearAllConstraints();
+            forceFields = [];
+            objectCounter = 0;
+            
+            // 重新创建初始物体
+            for (let i = 0; i < 10; i++) {
+                createPhysicsObject(
+                    "sphere",
+                    new BABYLON.Vector3((Math.random() - 0.5) * 8, 5 + Math.random() * 3, (Math.random() - 0.5) * 8),
+                    0.8,
+                    1,
+                    0.6,
+                    0.5,
+                    new BABYLON.Color3(Math.random(), Math.random(), Math.random())
+                );
+            }
+            
+            for (let i = 0; i < 5; i++) {
+                createPhysicsObject(
+                    "box",
+                    new BABYLON.Vector3((Math.random() - 0.5) * 8, 5 + Math.random() * 3, (Math.random() - 0.5) * 8),
+                    0.8,
+                    1.5,
+                    0.4,
+                    0.6,
+                    new BABYLON.Color3(Math.random(), Math.random(), Math.random())
+                );
+            }
+            
+            showNotification("场景已重置!");
+        }
+        
+        // ==================== 预设场景 ====================
+        function loadPresetScene(presetId) {
+            clearAllObjects();
+            clearAllConstraints();
+            
+            switch(presetId) {
+                case "domino":
+                    createDominoScene();
+                    break;
+                case "newton":
+                    createNewtonCradle();
+                    break;
+                case "stack":
+                    createStackChallenge();
+                    break;
+                case "pinball":
+                    createPinballScene();
+                    break;
+                case "destruction":
+                    createDestructionScene();
+                    break;
+            }
+            
+            showNotification(`已加载预设场景: ${presetId}`);
+        }
+        
+        function createDominoScene() {
+            const count = 15;
+            const spacing = 1.2;
+            const startX = -(count * spacing) / 2;
+            
+            for (let i = 0; i < count; i++) {
+                const mesh = createPhysicsObject(
+                    "box",
+                    new BABYLON.Vector3(startX + i * spacing, 1, 0),
+                    1,
+                    0.5,
+                    0.1,
+                    0.3,
+                    new BABYLON.Color3(0.8, 0.3 + i * 0.04, 0.2)
+                );
+                mesh.rotation.y = Math.PI / 2;
+                mesh.scaling = new BABYLON.Vector3(0.2, 2, 1);
+            }
+            
+            // 触发球
+            const trigger = createPhysicsObject(
+                "sphere",
+                new BABYLON.Vector3(startX - 3, 2, 0),
+                0.8,
+                2,
+                0.7,
+                0.3,
+                new BABYLON.Color3(1, 0, 0)
+            );
+            
+            setTimeout(() => {
+                if (trigger.physicsImpostor) {
+                    trigger.physicsImpostor.applyImpulse(
+                        new BABYLON.Vector3(8, 0, 0),
+                        trigger.position
+                    );
+                }
+            }, 1000);
+        }
+        
+        function createNewtonCradle() {
+            const count = 5;
+            const spacing = 0.9;
+            const startX = -(count - 1) * spacing / 2;
+            
+            for (let i = 0; i < count; i++) {
+                const mesh = createPhysicsObject(
+                    "sphere",
+                    new BABYLON.Vector3(startX + i * spacing, 4, 0),
+                    0.7,
+                    1,
+                    1,
+                    0,
+                    new BABYLON.Color3(0.9, 0.8, 0.2)
+                );
+            }
+            
+            // 抬起第一个球
+            setTimeout(() => {
+                const firstBall = scene.getMeshByName(`object_${objectCounter - count + 1}`);
+                if (firstBall && firstBall.physicsImpostor) {
+                    firstBall.position = new BABYLON.Vector3(startX - 2, 6, 0);
+                }
+            }, 500);
+        }
+        
+        function createStackChallenge() {
+            const layers = 8;
+            
+            for (let layer = 0; layer < layers; layer++) {
+                const boxesInLayer = layers - layer;
+                const startX = -(boxesInLayer - 1) * 0.55;
+                
+                for (let i = 0; i < boxesInLayer; i++) {
+                    createPhysicsObject(
+                        "box",
+                        new BABYLON.Vector3(startX + i * 1.1, 0.5 + layer * 1.05, 0),
+                        1,
+                        0.2,
+                        0,
+                        0.5,
+                        new BABYLON.Color3(0.2, 0.5 + layer * 0.06, 0.8)
+                    );
+                }
+            }
+            
+            // 顶部球体
+            createPhysicsObject(
+                "sphere",
+                new BABYLON.Vector3(0, 0.5 + layers * 1.05 + 2, 0),
+                0.8,
+                2,
+                0.6,
+                0.4,
+                new BABYLON.Color3(1, 0.2, 0.2)
+            );
+        }
+        
+        function createPinballScene() {
+            // 创建斜坡
+            for (let i = 0; i < 5; i++) {
+                const ramp = createPhysicsObject(
+                    "box",
+                    new BABYLON.Vector3(-8 + i * 3, 1 + i * 0.8, 0),
+                    1,
+                    0,
+                    0.2,
+                    0.5,
+                    new BABYLON.Color3(0.4, 0.4, 0.5)
+                );
+                ramp.rotation.z = -0.3;
+                ramp.scaling = new BABYLON.Vector3(3, 0.2, 2);
+            }
+            
+            // 障碍物
+            for (let i = 0; i < 8; i++) {
+                createPhysicsObject(
+                    "cylinder",
+                    new BABYLON.Vector3((Math.random() - 0.5) * 10, 0.5, (Math.random() - 0.5) * 6),
+                    0.6,
+                    0,
+                    0.8,
+                    0.2,
+                    new BABYLON.Color3(0.8, 0.4, 0.2)
+                );
+            }
+            
+            // 球
+            for (let i = 0; i < 3; i++) {
+                setTimeout(() => {
+                    createPhysicsObject(
+                        "sphere",
+                        new BABYLON.Vector3(-10, 8 + i * 2, (Math.random() - 0.5) * 2),
+                        0.6,
+                        1,
+                        0.9,
+                        0.1,
+                        new BABYLON.Color3(0.2, 0.8, 0.4)
+                    );
+                }, i * 800);
+            }
+        }
+        
+        function createDestructionScene() {
+            // 创建墙壁
+            const wallWidth = 8;
+            const wallHeight = 6;
+            
+            for (let x = 0; x < wallWidth; x++) {
+                for (let y = 0; y < wallHeight; y++) {
+                    createPhysicsObject(
+                        "box",
+                        new BABYLON.Vector3((x - wallWidth/2) * 1.05, 0.5 + y * 1.05, -5),
+                        1,
+                        0.5,
+                        0.1,
+                        0.6,
+                        new BABYLON.Color3(0.6, 0.4, 0.2)
+                    );
+                }
+            }
+            
+            // 发射球
+            setTimeout(() => {
+                const ball = createPhysicsObject(
+                    "sphere",
+                    new BABYLON.Vector3(0, 3, 8),
+                    1.5,
+                    5,
+                    0.7,
+                    0.3,
+                    new BABYLON.Color3(0.9, 0.1, 0.1)
+                );
+                
+                if (ball.physicsImpostor) {
+                    ball.physicsImpostor.applyImpulse(
+                        new BABYLON.Vector3(0, 2, -40),
+                        ball.position
+                    );
+                }
+            }, 1000);
+        }
+        
+        // ==================== 调试模式 ====================
+        function toggleDebugMode() {
+            debugMode = !debugMode;
+            
+            if (debugMode) {
+                // 显示速度向量
+                scene.meshes.forEach(mesh => {
+                    if (mesh.physicsImpostor && mesh.name !== "ground") {
+                        createVelocityVector(mesh);
+                    }
+                });
+                
+                showNotification("调试模式已开启");
+            } else {
+                // 清除调试可视化
+                velocityVectors.forEach(v => v.dispose());
+                velocityVectors = [];
+                forceVectors.forEach(v => v.dispose());
+                forceVectors = [];
+                collisionVisualizers.forEach(v => v.dispose());
+                collisionVisualizers = [];
+                
+                showNotification("调试模式已关闭");
+            }
+        }
+        
+        function createVelocityVector(mesh) {
+            const lines = BABYLON.MeshBuilder.CreateLines(
+                "velocity_" + mesh.name,
+                { points: [mesh.position, mesh.position] },
+                scene
+            );
+            lines.color = new BABYLON.Color3(0, 1, 0);
+            lines.alpha = 0.8;
+            velocityVectors.push(lines);
+            
+            scene.onBeforeRenderObservable.add(() => {
+                if (!mesh.isDisposed() && mesh.physicsImpostor) {
+                    const velocity = mesh.physicsImpostor.getLinearVelocity();
+                    const endPoint = mesh.position.add(velocity.scale(0.1));
+                    const positions = new Float32Array([
+                        mesh.position.x, mesh.position.y, mesh.position.z,
+                        endPoint.x, endPoint.y, endPoint.z
+                    ]);
+                    lines.updateVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+                }
+            });
+        }
+        
+        // ==================== 通知系统 ====================
+        function showNotification(text) {
+            const notification = new BABYLON.GUI.TextBlock();
+            notification.text = text;
+            notification.fontSize = "18px";
+            notification.color = "white";
+            notification.background = "rgba(79, 195, 247, 0.8)";
+            notification.cornerRadius = 10;
+            notification.width = "250px";
+            notification.height = "50px";
+            notification.top = "-200px";
+            notification.horizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+            notification.verticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+            advancedTexture.addControl(notification);
+            
+            // 动画
+            let frame = 0;
+            const animObserver = scene.onBeforeRenderObservable.add(() => {
+                frame++;
+                if (frame < 20) {
+                    notification.top = -200 + frame * 10 + "px";
+                } else if (frame > 100) {
+                    notification.alpha = 1 - (frame - 100) / 30;
+                }
+                
+                if (frame > 130) {
+                    notification.dispose();
+                    scene.onBeforeRenderObservable.remove(animObserver);
+                }
+            });
+        }
+        
+        // ==================== 性能监控 ====================
+        function updatePerformancePanel() {
+            const objectCount = scene.meshes.filter(m => m.physicsImpostor && m.name !== "ground").length;
+            document.getElementById("objectCount").textContent = objectCount;
+            document.getElementById("constraintCount").textContent = joints.length;
+            document.getElementById("particleCount").textContent = particleSystems.length;
+        }
+        
+        // ==================== 初始化场景 ====================
+        createScene().then(() => {
+            // 创建初始物体
+            const shadowGenerator = scene.lights.find(l => l instanceof BABYLON.DirectionalLight)?.getShadowGenerator();
+            for (let i = 0; i < 10; i++) {
+                createPhysicsObject(
+                    "sphere",
+                    new BABYLON.Vector3((Math.random() - 0.5) * 8, 5 + Math.random() * 3, (Math.random() - 0.5) * 8),
+                    0.8,
+                    1,
+                    0.6,
+                    0.5,
+                    new BABYLON.Color3(Math.random() * 0.8 + 0.2, Math.random() * 0.8 + 0.2, Math.random() * 0.8 + 0.2),
+                    shadowGenerator
+                );
+            }
+
+            for (let i = 0; i < 5; i++) {
+                createPhysicsObject(
+                    "box",
+                    new BABYLON.Vector3((Math.random() - 0.5) * 8, 5 + Math.random() * 3, (Math.random() - 0.5) * 8),
+                    0.8,
+                    1.5,
+                    0.4,
+                    0.6,
+                    new BABYLON.Color3(Math.random() * 0.8 + 0.2, Math.random() * 0.8 + 0.2, Math.random() * 0.8 + 0.2),
+                    shadowGenerator
+                );
+            }
+
+            // 渲染循环
+            let lastTime = performance.now();
+            let frameCount = 0;
+            let fps = 60;
+
+            engine.runRenderLoop(function() {
+                const currentTime = performance.now();
+                frameCount++;
+
+                if (currentTime - lastTime >= 1000) {
+                    fps = frameCount;
+                    frameCount = 0;
+                    lastTime = currentTime;
+                    document.getElementById("fpsValue").textContent = fps;
+                    updatePerformancePanel();
+                }
+
+                // 更新轨迹
+                updateTrajectories();
+
+                // 更新力场
+                updateForceFields();
+
+                // 更新时间缩放
+                if (!isPaused && physicsPlugin) {
+                    physicsPlugin.setTimeStep(1 / 60 * timeScale);
+                }
+
+                scene.render();
+            });
         });
-        
+
         // 窗口大小调整
         window.addEventListener('resize', function() {
             engine.resize();
